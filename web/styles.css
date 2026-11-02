@@ -886,3 +886,9 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
   .saved-view-strip #restore-hidden-row { max-width:200px; }
 }
 @media print { .plan-titlebar { display:block; min-height:0; margin:0 0 8px; } .plan-titlebar .plan-actions { display:none!important; } }
+/* Enterprise access status stays visible while navigating application sections. */
+.access-status{margin:14px 24px 0;padding:11px 15px;border:1px solid #bcd9cf;border-radius:8px;background:#eef8f3;color:#245f4c;font-size:13px;line-height:1.65}
+.access-status.read-only{border-color:#d2dfef;background:#f0f5fc;color:#365578}
+.access-status[hidden]{display:none}
+input[aria-readonly="true"]{background:#f1f4f8;color:#4c5e73}
+@media(max-width:600px){.access-status{margin:12px 14px 0;padding:10px 12px}}

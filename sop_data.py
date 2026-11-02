@@ -20,7 +20,7 @@ import sys
 
 import openpyxl
 
-from sop_paths import sales_source_files
+from sop_paths import sales_source_files, source_directory, runtime_data_directory
 
 
 ROOT = Path(__file__).resolve().parent
@@ -152,7 +152,7 @@ def _extract_generation_reference(source_dir=None, *, as_of=None):
     Optional paths are resolved against the caller's current directory; defaults
     are anchored beside this module so refresh() also works from a launcher.
     """
-    source_dir = Path(source_dir) if source_dir is not None else DEFAULT_SOURCE_DIR
+    source_dir = Path(source_dir) if source_dir is not None else source_directory(ROOT)
     path = source_dir / SOURCE_NAME
     if not path.is_file():
         raise FileNotFoundError(f"未找到销量汇总文件：{path}")
@@ -341,7 +341,7 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
     the workbook mtime, another tab, or the consolidated daily reference. IDs
     encode generation and configuration, so year-model changes remain separate.
     """
-    source_dir = Path(source_dir) if source_dir is not None else DEFAULT_SOURCE_DIR
+    source_dir = Path(source_dir) if source_dir is not None else source_directory(ROOT)
     now = datetime.now(SHANGHAI)
     observation = _date(as_of) if as_of else now.date()
     if observation is None:
@@ -482,7 +482,7 @@ def _resolve_lock_basis(explicit=None, settings_path=None):
     """A user-confirmed source interpretation persists across ordinary refreshes."""
     basis = explicit
     if basis is None:
-        settings_path = Path(settings_path) if settings_path else ROOT / "data" / "source_settings.json"
+        settings_path = Path(settings_path) if settings_path else runtime_data_directory(ROOT) / "source_settings.json"
         if settings_path.is_file():
             settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
             basis = settings.get("version_lock_basis", "unconfirmed")
@@ -640,7 +640,7 @@ def _build_lock_data(version_data, model_sales, basis):
 
 def extract(source_dir=None, *, as_of=None, version_lock_basis=None):
     """Read inputs without writing any file, including during source validation."""
-    source_dir = Path(source_dir) if source_dir is not None else DEFAULT_SOURCE_DIR
+    source_dir = Path(source_dir) if source_dir is not None else source_directory(ROOT)
     basis = _resolve_lock_basis(version_lock_basis)
     version_data = _extract_version_reference(source_dir, as_of=as_of)
     models = _model_monthly_locks(source_dir, as_of=as_of)
@@ -652,7 +652,7 @@ def extract(source_dir=None, *, as_of=None, version_lock_basis=None):
 def refresh(source_dir=None, output_path=None, *, as_of=None, version_lock_basis=None):
     """Refresh the local JSON atomically from input_file; never modify sources."""
     result = extract(source_dir, as_of=as_of, version_lock_basis=version_lock_basis)
-    output_path = Path(output_path) if output_path is not None else ROOT / "data" / "sales.json"
+    output_path = Path(output_path) if output_path is not None else runtime_data_directory(ROOT) / "sales.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")

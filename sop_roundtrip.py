@@ -468,9 +468,13 @@ class PlanRoundtrip:
                 entries.append({**labels, "plans": plans})
             return token, expected, values, entries
 
-    def import_content(self, content, choice=None):
+    def import_content(self, content, choice=None, *, actor=None):
         if choice not in {None, "db", "workbook"}:
             raise ValidationError("请选择保留网页值或使用表格值。")
+        if actor is not None:
+            actor = text_field(actor, "登录用户", 100)
+            if not actor:
+                raise ValidationError("登录用户不能为空。")
         token, exported, values, entries = self._parse(content)
         with self._lock():
             self._sync_before()
@@ -519,7 +523,7 @@ class PlanRoundtrip:
                     result = self.store.import_workbook_plans({"changes": changes, "entries": entries, "choice": choice,
                                                               "catalog_changes": exported.get("_catalog_changes", []),
                                                               "entry_tracking_token": token if exported.get("manifest") is not None else None,
-                                                              "owner": "Excel导入", "reason": "导出计划表回填", "notes": ""})
+                                                              "owner": actor or "Excel导入", "reason": "导出计划表回填", "notes": ""})
                 except ConflictError as error:
                     for conflict in error.conflicts:
                         index = conflict.get("manual_entry")

@@ -1,6 +1,90 @@
 /* S&OP workbench: all business records are persisted by the local service. */
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
+// Resolve from the loaded script so both standalone / and the IIS /sop/ mount work.
+const serviceBase = (() => {
+  if (typeof location === 'undefined') return ''; // Standalone unit-test context.
+  const script = document.currentScript?.src;
+  const directory = new URL('.', script || location.href).pathname;
+  return directory === '/' ? '' : directory.replace(/\/$/, '');
+})();
+const access = {gateway:!!serviceBase,canWrite:!serviceBase,user:'',message:serviceBase?'正在确认访问权限…':''};
+const writeActions = new Set(['grid-save','grid-add','manage-products','new-product','rename-model','open-workbook','sync-workbook','resolve-db','resolve-workbook','edit-first','bulk-plan','export-plan','import-plan','detail-edit','edit-shipments','save-settings','refresh-sales','create-snapshot']);
+const readOnlyMessage = '当前为只读访问。计划维护、导入、生成Excel及规则修改需由管理员配置写入权限。';
+function serviceUrl(path) {
+  if (typeof path !== 'string' || !path.startsWith('/api/') || /[\\\r\n]/.test(path)) throw new Error('无效的业务接口地址');
+  return serviceBase + path;
+}
+function requireWrite() {
+  if (access.canWrite) return;
+  const error = new Error(access.message || readOnlyMessage);
+  error.definite = true;
+  throw error;
+}
+async function serviceFetch(path, options = {}, writeProbe = false) {
+  const method = (options.method || 'GET').toUpperCase();
+  const mutating = !['GET','HEAD'].includes(method);
+  if (mutating && !(writeProbe && path === '/api/write-access')) requireWrite();
+  const response = await fetch(serviceUrl(path), {credentials:'same-origin',...options});
+  if (mutating && response.status === 403 && access.gateway) {
+    access.canWrite = false; access.message = readOnlyMessage; applyAccessControls();
+    if (!writeProbe) {const error = new Error(readOnlyMessage);error.definite = true;throw error;}
+  }
+  return response;
+}
+function applyAccessControls() {
+  const banner = $('#access-status');
+  if (banner) {
+    banner.hidden = !access.gateway;
+    banner.textContent = access.canWrite ? `当前用户：${access.user} · 已获得计划维护权限` : access.message || readOnlyMessage;
+    banner.classList.toggle('read-only', !access.canWrite);
+  }
+  const ownerButton = $('#owner-btn');
+  if (ownerButton && access.gateway) {
+    ownerButton.textContent = access.user || '企业用户';
+    ownerButton.disabled = true;
+    ownerButton.setAttribute('aria-label', '当前登录用户');
+    ownerButton.title = '操作人由企业登录身份确定';
+  }
+  $$('[data-action],[data-edit],[data-catalog-edit],[data-catalog-bind],#generation-filter,#bridge-toggle,#edit-dialog button[type="submit"]').forEach(control => {
+    const mutating = writeActions.has(control.dataset?.action) || control.hasAttribute?.('data-edit') || control.hasAttribute?.('data-catalog-edit') || control.hasAttribute?.('data-catalog-bind') || ['generation-filter','bridge-toggle'].includes(control.id) || control.type === 'submit';
+    const unavailable = (mutating && !access.canWrite) || (access.gateway && control.dataset?.action === 'open-workbook');
+    if (unavailable) {
+      if (!control.disabled) control.dataset.accessDisabled = 'true';
+      control.disabled = true;
+      control.title = access.gateway && control.dataset?.action === 'open-workbook' ? '内网平台通过下载或导出使用Excel，不会打开服务器桌面程序' : readOnlyMessage;
+    } else if (control.dataset?.accessDisabled === 'true') {
+      control.disabled = false; delete control.dataset.accessDisabled;
+    }
+  });
+  if (access.gateway) $$('input[id$="-owner"]').forEach(control => {control.value = access.user;control.readOnly = true;control.setAttribute('aria-readonly','true');});
+}
+async function initializeAccess() {
+  try {
+    const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined;
+    const response = await serviceFetch('/api/session', {signal});
+    if (!response.ok) throw new Error('登录信息暂不可用');
+    const session = await response.json();
+    if (!session || !['gateway','console'].includes(session.mode) || (serviceBase && session.mode !== 'gateway') || typeof session.canWrite !== 'boolean') throw new Error('登录信息暂不可用');
+    access.gateway = session.mode === 'gateway';
+    access.user = typeof session.user === 'string' ? session.user : '';
+    access.canWrite = !access.gateway && session.canWrite;
+    if (access.gateway) {
+      if (!access.user.trim()) throw new Error('登录信息暂不可用');
+      owner = access.user;
+      if (session.canWrite) {
+        const check = await serviceFetch('/api/write-access', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal}, true);
+        if (check.ok) {const permitted = await check.json();access.canWrite = permitted.canWrite === true || permitted.ok === true;}
+      }
+      access.message = access.canWrite ? '' : readOnlyMessage;
+    }
+  } catch {
+    // A root-only legacy console has no session API. Subpath deployments fail closed.
+    access.canWrite = !serviceBase && !access.gateway;
+    access.message = '无法确认企业登录或写入权限，当前仅允许查看。请稍后刷新或联系管理员。';
+  }
+  applyAccessControls();
+}
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = v => v == null ? '—' : Number(v).toLocaleString('zh-CN', {maximumFractionDigits: 2});
 const conflictValue = c => v => c.kind==='catalog' ? esc(typeof v==='boolean'?(v?'使用中':'停用'):v??'—') : fmt(v);
@@ -105,7 +189,7 @@ function gridCell(row,month){
   const fallback=row.isModel?sumPlan(state.products.filter(p=>!isModelPlan(p)&&p.brand===row.brand&&p.model===row.model),month,'sop').value:null;
   return `<input class="grid-quantity${String(value)!==String(old)?' changed':''}" data-grid-id="${esc(row.id)}" data-grid-month="${month}"${row.isModel?` data-grid-model="${esc(row.model)}"`:''} inputmode="numeric" value="${esc(value)}" aria-label="${esc(row.isModel?row.model:row.version||'新增版本')} ${month} SOP计划量" placeholder="${fallback==null?'—':`汇总${fmt(fallback)}`}"${row.isModel?' title="填写车型总量；留空时使用版本汇总，0表示明确零值"':''} ${gridLocked()||row.deleted?'disabled':''}>`;
 }
-function gridToolbar(){if(!gridDraft)return '';return `<section class="grid-toolbar" aria-label="网页维护"><div class="toolbar"><label class="field inline-field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''}></label><label class="field inline-field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label>${button('新增车型','grid-add','small',gridLocked()?'disabled':'')}<span class="grid-hint">车型填总量，展开改版本；总量优先，留空按版本汇总。合计在保存后更新。</span></div><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;}
+function gridToolbar(){if(!gridDraft)return '';return `<section class="grid-toolbar" aria-label="网页维护"><div class="toolbar"><label class="field inline-field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''} ${access.gateway?'readonly aria-readonly="true"':''}></label><label class="field inline-field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label>${button('新增车型','grid-add','small',gridLocked()?'disabled':'')}<span class="grid-hint">车型填总量，展开改版本；总量优先，留空按版本汇总。合计在保存后更新。</span></div><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;}
 function gridNewRows(anchor,visible){if(!gridDraft)return '';return [...gridDraft.rows.values()].filter(row=>row.isNew&&!row.virtual&&row.anchor===anchor).map(row=>`<tr class="version-row metric-plan-row grid-new-row" data-new-row="${esc(row.id)}"><th class="sticky-name" scope="row">${gridLabel(row)}</th><td class="sticky-metric">SOP计划量</td>${visible.map(m=>`<td class="sop-cell number${m<state.current_month?' past-month':''}">${isPlanMonthOpen(m)?gridCell(row,m):'未开放'}</td>${range==='rolling'&&m.endsWith('-12')?'<td class="annual-total">保存后计算</td>':''}`).join('')}${range==='rolling'?'':'<td class="annual-total">保存后计算</td>'}</tr>`).join('');}
 function gridAddRow(b=brand,m='',anchor=''){if(!gridDraft||gridLocked()||gridDraft.groups.get(anchor)?.deleted)return;const group=gridDraft.groups.get(anchor);if(group){b=group.brand;m=group.model;}const id='new_'+gridUUID(),isModel=!anchor;gridDraft.rows.set(id,{id,isNew:true,isModel,brand:b||'',model:m||'',version:isModel?modelPlanLabel:'',anchor,values:{},baselines:{},deleted:false});if(anchor)expanded.add(anchor);gridDraft.request=null;gridRender();$(`[data-grid-id="${id}"][data-grid-field="${isModel?'model':'version'}"]`)?.focus();}
 function gridRemoveRow(id){if(!gridDraft||gridLocked())return;const row=gridRow(id);if(!row)return;if(row.isNew)gridDraft.rows.delete(id);else row.deleted=!row.deleted;gridDraft.request=null;gridRender();}
@@ -139,7 +223,7 @@ function gridPayload(){
 async function saveGrid(){
   if(!gridDraft||gridDraft.saving)return;let payload;try{payload=gridDraft.request||gridPayload();if(!payload.changes.length&&!payload.catalog_changes.length&&!payload.entries.length)return toast('没有需要保存的修改');}catch(error){gridDraft.error=error.message;$('#grid-error').textContent=error.message;return;}
   gridDraft.request=payload;gridDraft.saving=true;gridDraft.error='';gridRender();
-  try{const response=await fetch('/api/plans/batch-edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});let result;try{result=await response.json();}catch{throw new Error('无法确认保存结果，请重试确认；草稿已保留');}
+  try{const response=await serviceFetch('/api/plans/batch-edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});let result;try{result=await response.json();}catch{throw new Error('无法确认保存结果，请重试确认；草稿已保留');}
     if(!response.ok){const error=new Error(result.error||'保存失败');error.definite=response.status>=400&&response.status<500&&response.status!==408&&response.status!==429;throw error;}
     if(!result.ok)throw new Error('无法确认保存结果，请重试确认');
     for(const c of payload.catalog_changes.filter(c=>c.active===false)){const p=gridRow(c.id)?.original;hiddenRows[rowViewKey('version',c.id)]=p?`${p.model} · ${p.version}（已停用）`:c.id;}
@@ -156,7 +240,7 @@ function shortMonth(m) { return `${m.slice(0,4)}.${m.slice(5)}`; }
 function dateText(t) { return t ? String(t).replace('T',' ').replace(/\.\d+/,'').replace(/\+08:00|Z/g,'').slice(0,19) : '尚未维护'; }
 function toast(msg, error = false) { const el = $('#toast'); el.textContent = msg; el.className = `toast visible ${error?'error':''}`; clearTimeout(toast.timer); toast.timer = setTimeout(()=>el.className='toast',5000); }
 async function api(path, body) {
-  const response = await fetch(path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const response = await serviceFetch(path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || data.message || `请求失败（${response.status}）`);
   return data;
@@ -173,6 +257,7 @@ async function load(render = true) {
   $('#current-time').textContent = `北京时间 ${dateText(state.now)}`;
   const ob = $('#owner-btn'); if (ob) ob.textContent = owner || '设置维护人';
   if(render) await renderPage();
+  applyAccessControls();
 }
 function generationMode() { return state?.generation_view?.mode||state?.settings?.generation_mode||'detail'; }
 function generationModeLabel(mode=generationMode()) { return mode==='summary'?'汇总代际':'单代际'; }
@@ -191,6 +276,7 @@ function generationWarnings() {
   return notes.length?`<div class="callout subtle" role="status"><p><strong>${generationModeLabel()}范围提示：</strong>${notes.map(esc).join('；')}</p></div>`:'';
 }
 async function changeGenerationMode(value,control) {
+  requireWrite();
   if(generationSwitchPending)return;
   if(!['detail','summary'].includes(value))throw new Error('请选择单代际或汇总代际');
   if(value===generationMode())return;
@@ -210,7 +296,7 @@ async function changeGenerationMode(value,control) {
     catch { showGenerationError('无法确认当前代际范围，请刷新重试。'+error.message); }
     toast(error.message,true);
   } finally {
-    generationSwitchPending=false;control.disabled=false;control.value=generationMode();
+    generationSwitchPending=false;control.disabled=!access.canWrite;control.value=generationMode();
     app.inert=false;app.removeAttribute('aria-busy');
     $('#generation-filter')?.focus({preventScroll:true});
   }
@@ -297,7 +383,7 @@ function quantity(q, pending='待维护') {
 }
 function opt(value,label,current) { return `<option value="${esc(value)}" ${value===current?'selected':''}>${esc(label)}</option>`; }
 function heading(sub, actions='') { return `<div class="page-heading"><div><h1>${titles[page]}</h1><p class="subtitle">${sub}</p></div><div class="toolbar">${actions}</div></div>`; }
-function button(text,action,cls='secondary',extra='') { return `<button type="button" class="button ${cls}" data-action="${action}" ${extra}>${text}</button>`; }
+function button(text,action,cls='secondary',extra='') { if ((writeActions.has(action)&&!access.canWrite)||(access.gateway&&action==='open-workbook')) extra+=' disabled title="'+esc(readOnlyMessage)+'"'; return `<button type="button" class="button ${cls}" data-action="${action}" ${extra}>${text}</button>`; }
 function brandTabs() { return `<div class="brand-tabs" role="group" aria-label="品牌筛选">${['',...brands].map(b=>`<button class="brand-tab ${b===brand?'active':''}" data-brand="${b}" aria-pressed="${b===brand}">${b||'全部品牌'}<span>${state.products.filter(p=>!b||p.brand===b).length}</span></button>`).join('')}</div>`; }
 function filterBar(extra='') {
   const ms=[...new Set(state.products.filter(p=>!brand||p.brand===brand).map(p=>p.model))];
@@ -352,7 +438,7 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
       const q=sumPlan(ps,m,'sop');
       const open=isPlanMonthOpen(m)&&(!one||canEditProduct(p,m));
       const closedLabel=one&&p.read_only?'—':one&&!productApplies(p,m)?'未适用':one&&p.active===false?'—':'未开放';
-      cell=`<td class="sop-cell number${past}${open?'':' closed-month'}"${open?'':` title="${one&&p.read_only?'汇总代际计划自动相加，请切换至单代际维护':one&&p.active===false?'版本已停用，已有计划保留':one&&!productApplies(p,m)?'此月不在版本适用月份内':'此月份不在已开放计划范围内'}"`}>${one&&open?`<button class="edit-cell" data-edit="${p.id}" data-month="${m}" aria-label="编辑${esc(p.version)} ${m} SOP计划${q.value==null?'（待维护）':''}" title="${q.value==null?'待维护，点击输入计划量':'点击维护计划量'}">${quantity(q,'—')}</button>`:quantity(q,open?'—':closedLabel)}</td>`;
+      cell=`<td class="sop-cell number${past}${open?'':' closed-month'}"${open?'':` title="${one&&p.read_only?'汇总代际计划自动相加，请切换至单代际维护':one&&p.active===false?'版本已停用，已有计划保留':one&&!productApplies(p,m)?'此月不在版本适用月份内':'此月份不在已开放计划范围内'}"`}>${one&&open&&access.canWrite?`<button class="edit-cell" data-edit="${p.id}" data-month="${m}" aria-label="编辑${esc(p.version)} ${m} SOP计划${q.value==null?'（待维护）':''}" title="${q.value==null?'待维护，点击输入计划量':'点击维护计划量'}">${quantity(q,'—')}</button>`:quantity(q,open?'—':closedLabel)}</td>`;
     }
     if(draftRow&&!isLock&&(modelDraft?isPlanMonthOpen(m)&&(!draftRow.original||canEditProduct(draftRow.original,m)):canEditProduct(p,m)))cell=`<td class="sop-cell number${past}">${gridCell(draftRow,m)}</td>`;
     return cell+(range==='rolling'&&m.endsWith('-12')?calendarPlanCell(ps,m.slice(0,4),field):'');
@@ -409,7 +495,7 @@ function planning() {
     <div class="sheet-footnote"><span>— 暂无数据或待维护；0为明确零值；灰底为已过去月份；未开放月份不可维护。${rolling?'年度计划量统计对应年1—12月，含视图外月份；':''}合计仅累加已知值。</span><span>${showLocks?(modelLockBasis?'锁单取源表“交车锁单”车型汇总，未分配至版本。':versionLockBasis?`车型锁单取“交车锁单”行，版本锁单取“版本／数量”行；版本锁单最新来源月：${versionLockLatest?shortMonth(versionLockLatest):'暂无'}。`:''):'锁单数已隐藏，可用上方按钮打开。'}点击车型展开版本${showLocks?'锁单和':''}计划。</span></div>
     ${notes.length?`<details class="sheet-notes"><summary>数据口径与来源说明</summary>${notes.map(n=>`<p>${esc(n.message)}</p>`).join('')}</details>`:''}`;  if(gridDraft){$$('.annual-toolbar input,.annual-toolbar select,.saved-view-strip input,.saved-view-strip select,.saved-view-strip button,[data-action=toggle-wenjie],[data-action=import-plan],[data-action=export-plan]').forEach(el=>el.disabled=true);if(gridLocked())$$('[data-expand],[data-action=expand-all],[data-action=toggle-locks]').forEach(el=>el.disabled=true);}
 }
-function openDialog(html) { $('#edit-dialog').classList.toggle('catalog-dialog',html.includes('id="catalog-manager"')); $('#edit-dialog').classList.toggle('export-dialog',html.includes('id="export-plan-form"')||html.includes('id="import-plan-form"')); $('#dialog-content').innerHTML=html; const title=$('h2',$('#dialog-content'));if(title)title.id='dialog-title';$('#edit-dialog').showModal(); }
+function openDialog(html) { $('#edit-dialog').classList.toggle('catalog-dialog',html.includes('id="catalog-manager"')); $('#edit-dialog').classList.toggle('export-dialog',html.includes('id="export-plan-form"')||html.includes('id="import-plan-form"')); $('#dialog-content').innerHTML=html; const title=$('h2',$('#dialog-content'));if(title)title.id='dialog-title';applyAccessControls();$('#edit-dialog').showModal(); }
 function closeDialog() { $('#edit-dialog').close(); }
 function productManager() {
   const catalog=state.products.filter(p=>!p.read_only);
@@ -466,6 +552,7 @@ function renameModel() {
   }catch(err){productFormError(err);save.disabled=false;}};
 }
 function bulkPlan() {
+  requireWrite();
   if(gridDraft)return;
   clearTimeout(searchTimer);
   const rows=new Map(),modelRows=new Map(),groups=new Map();
@@ -482,6 +569,7 @@ function bulkPlan() {
 }
 function editorOptions(id,ps=products()) {return ps.filter(p=>!p.read_only).map(p=>opt(p.id,`${p.brand} · ${p.model} · ${p.version}`,id)).join('');}
 async function editInGrid(id,month=state.current_month){
+  requireWrite();
   const product=state.products.find(p=>p.id===id);
   if(!product||!canEditProduct(product,month))return toast('此行当前不可维护，请核对代际和月份',true);
   if($('#edit-dialog')?.open)closeDialog();
@@ -594,7 +682,7 @@ function exportScope(options) {
 async function downloadPlanExport(options) {
   const result=buildPlanExport(options,exportProducts(options)),chosen=result.selectedMonths,includeVersions=result.headers.includes('版本');
   const scope=exportScope(options);
-  const response=await fetch('/api/plans/export-xlsx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+  const response=await serviceFetch('/api/plans/export-xlsx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
     schema_version:1,current_month:state.current_month,months:chosen,include_locks:!!options.includeLocks,include_versions:includeVersions,
     ...(state.generation_view?{generation_mode:generationMode(),generation_rule_signature:state.generation_view.rule_signature}:{}),
     scope,headers:result.headers,rows:result.rows,annual_plans:result.annualPlans,row_product_ids:result.rowProductIds,selected_product_ids:result.selectedProductIds
@@ -665,7 +753,7 @@ async function readPlanImportFile(file) {
 async function submitPlanImport(payload,choice) {
   if(choice!==undefined&&!['db','workbook'].includes(choice))throw new Error('请选择冲突项的处理方式');
   const body={filename:payload.filename,content_base64:payload.content_base64,...(choice?{choice}:{})};
-  const response=await fetch('/api/plans/import-xlsx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const response=await serviceFetch('/api/plans/import-xlsx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   let data;
   try{data=await response.json();}catch{throw new Error('未能确认导入结果，请刷新看板检查后重试');}
   if(!response.ok){const fallback=response.status===409?'表格与网页存在同时修改的计划，请核对后选择保留值':`导入未完成（${response.status}）`;const error=new Error(data.error||data.message||fallback);error.status=response.status;error.data=data;throw error;}
@@ -808,8 +896,8 @@ function editShipments(id=matchProduct||products().find(p=>!p.read_only)?.id) {
 function dataPage() {
   const meta=state.meta,sources=state.sources?.length?state.sources:(meta.source_files||[]),q=meta.quality||[];
   $('#app').innerHTML=heading('数据来源、Excel同步与计划规则。',button('来源与停用管理','manage-products')+button(state.workbook_sync?.status==='absent'?'创建维护Excel':'打开维护Excel','open-workbook')+(state.workbook_sync?.status==='absent'?'':button('同步Excel','sync-workbook'))+button('刷新销量文件','refresh-sales','primary'))+
-    `<div class="two-col"><section class="card"><div class="panel-head"><div><h2>销量数据接入</h2><p>只更新历史参考，不覆盖人工计划</p></div><span class="badge good">已接入</span></div><div class="card-body"><dl class="info-list"><dt>文件目录</dt><dd>项目目录 / input_file</dd><dt>业务数据截至</dt><dd>${esc(meta.data_through||'待确认')}</dd><dt>自动更新</dt><dd>${esc(state.source_refresh?.message||'原始文件每分钟检查，保存稳定后自动读取')}</dd><dt>最近读取</dt><dd>${dateText(meta.generated_at)}</dd><dt>版本数量</dt><dd>${state.products.length} 个</dd><dt>参考口径</dt><dd>${meta.metrics.map(m=>esc(m.label)).join('、')}</dd></dl><h3>来源文件</h3><ul class="source-list">${sources.map(s=>`<li>${esc(typeof s==='string'?s:s.file||s.name||s.path||JSON.stringify(s))}${s.sheet?`<small>${esc(s.sheet)}</small>`:''}</li>`).join('')}</ul>${(meta.notes||[]).map(n=>`<p class="form-help">${esc(n)}</p>`).join('')}</div></section><section class="card"><div class="panel-head"><div><h2>计划与快照规则</h2><p>所有日期与截点使用北京时间</p></div></div><div class="card-body"><dl class="info-list"><dt>维护颗粒度</dt><dd>品牌 → 车型＋年款 × 月份；版本可选</dd><dt>本月计划口径</dt><dd>全月总量（含已发生部分）</dd><dt>年度扩展</dt><dd>每年9月开放到次年12月</dd><dt>当前计划截止</dt><dd>${shortMonth(state.plan_end)}</dd><dt>每天保存</dt><dd>24:00；周日24点快照同时用于考核</dd><dt>提前0周</dt><dd>月初周按周一至周日：月内超过4天取上周日，否则取当周日。2027年1月取1月3日24点。</dd></dl><label class="checkbox-field"><input id="bridge-toggle" type="checkbox" ${state.settings.bridge_m6!==false?'checked':''}>7、8月补足M+6（7月到次年1月，8月到次年2月）</label><p class="form-help">已确认7、8月补足M+6；每年9月扩展到次年12月。维护人姓名用于留痕，本机版不提供账号身份认证。</p>${button('保存规则','save-settings')}</div></section></div>`+
-    `<section class="card page-section"><div class="panel-head"><div><h2>数据检查与口径说明</h2><p>显示来源实际包含的内容，不用推算代替历史数据</p></div></div><div class="card-body">${q.length?q.map(v=>`<div class="quality-row"><span class="badge ${v.status==='ok'||v.status==='passed'?'good':'neutral'}">${esc(v.level==='warning'?'待核对':v.status||'说明')}</span><span>${esc(typeof v==='string'?v:v.message||v.name||JSON.stringify(v))}</span></div>`).join(''):'<p>数据读取已完成。详细汇总与映射说明见来源记录。</p>'}<div class="callout">实际发货量由SP或IoC单独提供；预测销量、SOP计划量由负责人维护。未维护的数据不会自动补0。</div></div></section><section class="card page-section"><div class="panel-head"><div><h2>运行与留存</h2><p>保持工作台命令窗口运行，浏览器页面可以关闭</p></div></div><div class="card-body"><p>双击“启动工作台.cmd”运行，关闭命令窗口或按Ctrl+C即停止。运行期间自动保存每日快照，电脑关机或关闭工作台后无法实时执行；下次启动会依据修改日志还原截点，并标注实际生成时间。首次启用之前的计划历史不补造。</p><p class="form-help">计划与修改记录保存在本项目的 data/sop.sqlite3，表格只是同一数据的另一维护入口。需要多位同事共同维护时，应将同一服务部署到内网主机并配置身份访问。</p></div></section>`;
+    `<div class="two-col"><section class="card"><div class="panel-head"><div><h2>销量数据接入</h2><p>只更新历史参考，不覆盖人工计划</p></div><span class="badge good">已接入</span></div><div class="card-body"><dl class="info-list"><dt>文件目录</dt><dd>项目目录 / input_file</dd><dt>业务数据截至</dt><dd>${esc(meta.data_through||'待确认')}</dd><dt>自动更新</dt><dd>${esc(state.source_refresh?.message||'原始文件每分钟检查，保存稳定后自动读取')}</dd><dt>最近读取</dt><dd>${dateText(meta.generated_at)}</dd><dt>版本数量</dt><dd>${state.products.length} 个</dd><dt>参考口径</dt><dd>${meta.metrics.map(m=>esc(m.label)).join('、')}</dd></dl><h3>来源文件</h3><ul class="source-list">${sources.map(s=>`<li>${esc(typeof s==='string'?s:s.file||s.name||s.path||JSON.stringify(s))}${s.sheet?`<small>${esc(s.sheet)}</small>`:''}</li>`).join('')}</ul>${(meta.notes||[]).map(n=>`<p class="form-help">${esc(n)}</p>`).join('')}</div></section><section class="card"><div class="panel-head"><div><h2>计划与快照规则</h2><p>所有日期与截点使用北京时间</p></div></div><div class="card-body"><dl class="info-list"><dt>维护颗粒度</dt><dd>品牌 → 车型＋年款 × 月份；版本可选</dd><dt>本月计划口径</dt><dd>全月总量（含已发生部分）</dd><dt>年度扩展</dt><dd>每年9月开放到次年12月</dd><dt>当前计划截止</dt><dd>${shortMonth(state.plan_end)}</dd><dt>每天保存</dt><dd>24:00；周日24点快照同时用于考核</dd><dt>提前0周</dt><dd>月初周按周一至周日：月内超过4天取上周日，否则取当周日。2027年1月取1月3日24点。</dd></dl><label class="checkbox-field"><input id="bridge-toggle" type="checkbox" ${state.settings.bridge_m6!==false?'checked':''}>7、8月补足M+6（7月到次年1月，8月到次年2月）</label><p class="form-help">已确认7、8月补足M+6；每年9月扩展到次年12月。${access.gateway?'操作人由企业登录身份确定，服务端校验写入权限并留存操作记录。':'维护人姓名用于留痕，本机版不提供账号身份认证。'}</p>${button('保存规则','save-settings')}</div></section></div>`+
+    `<section class="card page-section"><div class="panel-head"><div><h2>数据检查与口径说明</h2><p>显示来源实际包含的内容，不用推算代替历史数据</p></div></div><div class="card-body">${q.length?q.map(v=>`<div class="quality-row"><span class="badge ${v.status==='ok'||v.status==='passed'?'good':'neutral'}">${esc(v.level==='warning'?'待核对':v.status||'说明')}</span><span>${esc(typeof v==='string'?v:v.message||v.name||JSON.stringify(v))}</span></div>`).join(''):'<p>数据读取已完成。详细汇总与映射说明见来源记录。</p>'}<div class="callout">实际发货量由SP或IoC单独提供；预测销量、SOP计划量由负责人维护。未维护的数据不会自动补0。</div></div></section><section class="card page-section"><div class="panel-head"><div><h2>运行与留存</h2><p>${access.gateway?'由内网服务统一运行，浏览器页面可以关闭':'保持工作台命令窗口运行，浏览器页面可以关闭'}</p></div></div><div class="card-body"><p>${access.gateway?'内网服务由管理员维护，访问者无需运行本机命令窗口。服务运行期间自动保存每日快照；停机后按已留存修改记录还原截点并标注实际生成时间，不补造上线前历史。':'双击“启动工作台.cmd”运行，关闭命令窗口或按Ctrl+C即停止。运行期间自动保存每日快照，电脑关机或关闭工作台后无法实时执行；下次启动会依据修改日志还原截点，并标注实际生成时间。首次启用之前的计划历史不补造。'}</p><p class="form-help">${access.gateway?'计划与修改记录集中保存在服务器的数据目录；表格是同一数据的另一维护入口。访问和写入权限由内网平台及业务服务执行。':'计划与修改记录保存在本项目的 data/sop.sqlite3，表格只是同一数据的另一维护入口。需要多位同事共同维护时，应将同一服务部署到内网主机并配置身份访问。'}</p></div></section>`;
 }
 async function renderPage() {
   $('#page-title').textContent=titles[page];
@@ -818,6 +906,8 @@ async function renderPage() {
   if(page==='planning')planning();else if(page==='history')await historyPage();else if(page==='matching')await matchingPage();else dataPage();
 }
 async function handleAction(action,el) {
+  if(writeActions.has(action))requireWrite();
+  if(access.gateway&&action==='open-workbook')throw new Error('请通过下载或导出使用Excel');
   if(action==='grid-save')return saveGrid();
   if(action==='grid-cancel'){if(gridLocked())return;gridDraft=null;planning();return;}
   if(action==='grid-add')return gridAddRow();
@@ -876,7 +966,7 @@ async function handleAction(action,el) {
   if(action==='export-snapshot') {
     const s=currentSnapshot.snapshot,originalText=el.textContent;el.disabled=true;el.textContent='正在准备Excel…';
     try {
-      const response=await fetch(`/api/snapshots/${encodeURIComponent(s.id)}/excel`);
+      const response=await serviceFetch(`/api/snapshots/${encodeURIComponent(s.id)}/excel`);
       if(!response.ok){const failure=await response.json();throw new Error(failure.error||'Excel备份尚未生成，请稍后重试');}
       const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');
       link.href=url;link.download=`SOP快照_${s.business_date}_${s.id}.xlsx`;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
@@ -912,12 +1002,12 @@ document.addEventListener('click',async e=>{
     if(gridLocked()&&['expand-all','toggle-locks'].includes(el.dataset.action))return;
     if(el.dataset.hideLevel){hideRow(el.dataset.hideLevel,el.dataset.hideId,el.dataset.hideLabel);return;}
     if(el.dataset.restoreRow){delete hiddenRows[el.dataset.restoreRow];refreshHiddenRows();return;}
-    if(el.dataset.catalogBind){bindProductSource(el.dataset.catalogBind);return;}
-    if(el.dataset.catalogEdit){editProduct(el.dataset.catalogEdit);return;}
+    if(el.dataset.catalogBind){requireWrite();bindProductSource(el.dataset.catalogBind);return;}
+    if(el.dataset.catalogEdit){requireWrite();editProduct(el.dataset.catalogEdit);return;}
     if(el.dataset.page){page=el.dataset.page;if(page==='matching')query='';await renderPage();return;}
     if('brand' in el.dataset){brand=el.dataset.brand;model='';matchProduct='';query='';selected=null;await renderPage();return;}
     if(el.dataset.range){range=el.dataset.range;planning();return;}
-    if(el.dataset.edit){await editInGrid(el.dataset.edit,el.dataset.month);return;}
+    if(el.dataset.edit){requireWrite();await editInGrid(el.dataset.edit,el.dataset.month);return;}
     if(el.dataset.detail){await showDetail(el.dataset.detail);return;}
     if(el.dataset.snapshot){currentSnapshot=await api(`/api/snapshots/${encodeURIComponent(el.dataset.snapshot)}`);renderSnapshot(currentSnapshot);return;}
     if(el.dataset.matchSnapshot){currentSnapshot=await api(`/api/snapshots/${encodeURIComponent(el.dataset.matchSnapshot)}`);page='history';await renderPage();return;}
@@ -942,12 +1032,14 @@ document.addEventListener('change',async e=>{
     if(e.target.id==='match-product'){matchProduct=e.target.value;await matchingPage();}
   }catch(err){toast(err.message,true);}
 });
+if(typeof MutationObserver!=='undefined'){const accessObserver=new MutationObserver(()=>applyAccessControls());for(const selector of ['#app','#dialog-content']){const region=$(selector);if(region)accessObserver.observe(region,{childList:true,subtree:true});}}
 let searchTimer;
 document.addEventListener('input',e=>{
-  if(gridDraft){if(gridLocked())return;if(e.target.dataset.gridGroup){gridChangeModel(e.target.dataset.gridGroup,e.target.dataset.gridGroupField,e.target.value);return;}const row=gridRow(e.target.dataset.gridId);if(row){if(e.target.dataset.gridMonth)row.values[e.target.dataset.gridMonth]=e.target.value;else if(e.target.dataset.gridField)row[e.target.dataset.gridField]=e.target.value;e.target.removeAttribute('aria-invalid');e.target.classList.add('changed');gridDraft.request=null;return;}if(e.target.id==='grid-owner'){gridDraft.owner=e.target.value;return;}if(e.target.id==='grid-reason'){gridDraft.reason=e.target.value;return;}return;}
+  if(gridDraft){if(gridLocked())return;if(e.target.dataset.gridGroup){gridChangeModel(e.target.dataset.gridGroup,e.target.dataset.gridGroupField,e.target.value);return;}const row=gridRow(e.target.dataset.gridId);if(row){if(e.target.dataset.gridMonth)row.values[e.target.dataset.gridMonth]=e.target.value;else if(e.target.dataset.gridField)row[e.target.dataset.gridField]=e.target.value;e.target.removeAttribute('aria-invalid');e.target.classList.add('changed');gridDraft.request=null;return;}if(e.target.id==='grid-owner'){if(!access.gateway)gridDraft.owner=e.target.value;return;}if(e.target.id==='grid-reason'){gridDraft.reason=e.target.value;return;}return;}
   if(e.target.id==='table-view-name'){viewNameDraft=e.target.value;return;}
   if(e.target.id==='version-search'){clearTimeout(searchTimer);query=e.target.value;searchTimer=setTimeout(async()=>{const pos=e.target.selectionStart;await renderPage();const inp=$('#version-search');if(inp){inp.focus();inp.setSelectionRange(pos,pos)}},300);}});
 $('#owner-btn')?.addEventListener('click',()=>{
+  if(access.gateway)return;
   if(gridDraft)return toast('请在表内维护条填写维护人',true);
   openDialog(`<form id="owner-form"><h2>设置维护人</h2><p class="subtitle">姓名将记录在之后保存的计划中。</p><label class="field">姓名<input id="owner-name" value="${esc(owner)}" required maxlength="60"></label><div class="dialog-actions">${button('取消','close-dialog')}<button class="button primary" type="submit">保存</button></div></form>`);
   $('#owner-form').onsubmit=e=>{e.preventDefault();owner=$('#owner-name').value.trim();localStorage.setItem('sop-owner',owner);$('#owner-btn').textContent=owner;closeDialog();};
@@ -955,7 +1047,7 @@ $('#owner-btn')?.addEventListener('click',()=>{
 $('#refresh-btn')?.addEventListener('click',async()=>{try{await load();toast('已载入最新计划');}catch(err){toast(err.message,true);}});
 window.addEventListener('beforeunload',e=>{if(gridDraft){e.preventDefault();e.returnValue='';}});
 window.addEventListener('unhandledrejection',e=>toast(e.reason?.message||'加载失败，请重试',true));
-load().catch(err=>{$('#app').innerHTML=`<div class="empty-state"><h1>暂时无法连接数据服务</h1><p>${esc(err.message)}</p><p>请使用项目中的启动脚本打开看板。</p></div>`;});
+initializeAccess().then(()=>load()).catch(err=>{$('#app').innerHTML=`<div class="empty-state"><h1>暂时无法连接数据服务</h1><p>${esc(err.message)}</p><p>${access.gateway?'请联系应用负责人检查内网业务服务，稍后刷新重试。':'请使用项目中的启动脚本打开看板。'}</p></div>`;});
 
 // Rule changes also refresh an absent maintenance workbook's current view.
 setInterval(pollWorkbookStatus,8000);

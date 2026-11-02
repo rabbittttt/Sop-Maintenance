@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 
-from sop_paths import sales_source_files
+from sop_paths import sales_source_files, source_directory, runtime_data_directory
 from sop_store import ValidationError
 
 LOGGER = logging.getLogger("sop")
@@ -33,10 +33,11 @@ class SalesRefresh:
             return dict(self._status)
 
     def fingerprint(self):
-        paths = [self.root / "input_file" / name for name in (
+        source = source_directory(self.root)
+        paths = [source / name for name in (
             "鸿蒙智行大定选配比例分析.xlsx", "鸿蒙智行锁单选配比例分析.xlsx")]
-        paths = sorted(set(paths) | set(sales_source_files(self.root / "input_file")))
-        paths.append(self.root / "data/source_settings.json")
+        paths = sorted(set(paths) | set(sales_source_files(source)))
+        paths.append(runtime_data_directory(self.root) / "source_settings.json")
         result = []
         for path in paths:
             try:

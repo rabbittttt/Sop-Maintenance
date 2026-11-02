@@ -1,6 +1,7 @@
 """Read shared generation rules for each operation; never cache Python imports."""
 import ast
 import hashlib
+import os
 import re
 import unicodedata
 from collections import defaultdict
@@ -112,7 +113,7 @@ def _display_labels(data):
 
 def load_merge_rules(path=None):
     """Read only the literal MERGE_GROUPS assignment; never execute the file."""
-    path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
+    path = Path(path) if path is not None else Path(os.environ.get("SOP_SHARED_CONFIG") or DEFAULT_CONFIG_PATH)
     label = CONFIG_RELATIVE_PATH.as_posix() if path == DEFAULT_CONFIG_PATH else str(path)
     try:
         source = path.read_bytes()

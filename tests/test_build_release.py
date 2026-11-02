@@ -1,0 +1,75 @@
+"""Release builds preserve source/data and expose only the declared runtime."""
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+
+SPEC = importlib.util.spec_from_file_location("sop_release_builder", Path(__file__).resolve().parents[1] / "scripts" / "build_release.py")
+BUILDER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(BUILDER)
+
+
+class BuildReleaseTest(unittest.TestCase):
+    def source(self, folder):
+        root = Path(folder) / "source"
+        for name in BUILDER.REQUIRED_FILES:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture runtime " + name, encoding="utf-8")
+        (root / "data").mkdir()
+        (root / "data" / "sop.sqlite3").write_bytes(b"private database")
+        (root / "input_file").mkdir()
+        (root / "input_file" / "source.xlsx").write_bytes(b"private workbook")
+        (root / ".env").write_text("private secret", encoding="utf-8")
+        return root
+
+    def test_manifest_covers_only_runtime_and_preserves_source_data(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(folder)
+            before = {path.relative_to(source): path.read_bytes() for path in source.rglob("*") if path.is_file()}
+            output = Path(folder) / "release"
+            manifest = BUILDER.build_release(source, output)
+            self.assertEqual(manifest["appId"], "hima-sop")
+            self.assertEqual(manifest["schemaVersion"], 1)
+            self.assertEqual({entry["path"] for entry in manifest["files"]}, BUILDER.REQUIRED_FILES)
+            for entry in manifest["files"]:
+                data = (output / entry["path"]).read_bytes()
+                self.assertEqual(entry["bytes"], len(data))
+                self.assertEqual(entry["sha256"], hashlib.sha256(data).hexdigest())
+            self.assertEqual(json.loads((output / "sop-release.json").read_text())["files"], manifest["files"])
+            self.assertFalse((output / "data").exists())
+            self.assertFalse((output / "input_file").exists())
+            self.assertFalse((output / ".env").exists())
+            self.assertEqual(before, {path.relative_to(source): path.read_bytes() for path in source.rglob("*") if path.is_file()})
+
+    def test_existing_destination_and_source_internal_output_are_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(folder)
+            existing = Path(folder) / "existing"
+            existing.mkdir()
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                BUILDER.build_release(source, existing)
+            with self.assertRaisesRegex(ValueError, "outside"):
+                BUILDER.build_release(source, source / "release")
+            self.assertFalse((source / "release").exists())
+
+    def test_non_public_web_file_fails_before_output_is_created(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(folder)
+            (source / "web" / "secret.env").write_text("secret", encoding="utf-8")
+            output = Path(folder) / "release"
+            with self.assertRaisesRegex(ValueError, "non-public"):
+                BUILDER.build_release(source, output)
+            self.assertFalse(output.exists())
+
+    def test_path_contract_blocks_private_and_traversal_names(self):
+        for value in ("../server.py", "web/../server.py", "web/.env", "web/data/input.json", "data/sales.json", "scripts/node_modules/x.mjs", "C:/server.py", "web\\index.html"):
+            with self.subTest(path=value):
+                self.assertFalse(BUILDER.allowed_release_path(value))
+
+
+if __name__ == "__main__":
+    unittest.main()
