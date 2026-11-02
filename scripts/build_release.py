@@ -87,12 +87,21 @@ def source_files(source: Path) -> list[Path]:
 
 
 def git_provenance(source: Path) -> tuple[str | None, bool | None]:
+    def git_output(*arguments: str) -> str:
+        # Git for Windows emits UTF-8 paths even when Python's preferred text
+        # encoding is a legacy code page. Never decode a CJK source root with
+        # locale defaults or mistake its parent repository for this project.
+        return subprocess.run(
+            ["git", "-c", "core.quotepath=false", "-C", str(source), *arguments],
+            capture_output=True, encoding="utf-8", errors="strict", check=True,
+        ).stdout
+
     try:
-        repository = subprocess.run(["git", "-C", str(source), "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
+        repository = git_output("rev-parse", "--show-toplevel").strip()
         if os.path.normcase(str(Path(repository).resolve())) != os.path.normcase(str(source.resolve())):
             return None, None
-        head = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "-C", str(source), "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
+        head = git_output("rev-parse", "HEAD").strip()
+        dirty = git_output("status", "--porcelain")
         return head, bool(dirty.strip())
     except (OSError, subprocess.CalledProcessError):
         return None, None

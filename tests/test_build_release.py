@@ -3,6 +3,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -69,6 +71,38 @@ class BuildReleaseTest(unittest.TestCase):
         for value in ("../server.py", "web/../server.py", "web/.env", "web/data/input.json", "data/sales.json", "scripts/node_modules/x.mjs", "C:/server.py", "web\\index.html"):
             with self.subTest(path=value):
                 self.assertFalse(BUILDER.allowed_release_path(value))
+
+    @unittest.skipUnless(shutil.which("git"), "Git is required for source provenance integration")
+    def test_real_git_cjk_path_records_clean_and_dirty_source_without_parent_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(Path(folder) / "计划部 临时项目")
+
+            def git(*arguments):
+                return subprocess.run(
+                    ["git", "-c", "core.quotepath=false", "-c", "core.autocrlf=false",
+                     "-c", "user.name=SOP Release Test", "-c", "user.email=release-test@example.invalid",
+                     "-c", "commit.gpgsign=false", "-C", str(source), *arguments],
+                    capture_output=True, encoding="utf-8", errors="strict", check=True,
+                ).stdout.strip()
+
+            git("init", "-b", "main")
+            git("add", ".")
+            git("commit", "-m", "Local release provenance fixture")
+            expected = git("rev-parse", "HEAD")
+            clean = BUILDER.build_release(source, Path(folder) / "clean-release")
+            self.assertEqual(clean["sourceCommit"], expected)
+            self.assertIs(clean["sourceDirty"], False)
+
+            # A non-repository subdirectory must not inherit this parent's SHA.
+            nested = source / "nested-source"
+            nested.mkdir()
+            self.assertEqual(BUILDER.git_provenance(nested), (None, None))
+
+            server = source / "server.py"
+            server.write_text(server.read_text(encoding="utf-8") + "\nmodified", encoding="utf-8")
+            dirty = BUILDER.build_release(source, Path(folder) / "dirty-release")
+            self.assertEqual(dirty["sourceCommit"], expected)
+            self.assertIs(dirty["sourceDirty"], True)
 
 
 if __name__ == "__main__":
