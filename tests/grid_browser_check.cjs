@@ -45,6 +45,7 @@ async function main() {
     await page.route(`${origin}/**`,async route=>{
       const url=new URL(route.request().url());
       if(url.pathname.startsWith('/api/'))apiPaths.push(url.pathname);
+      if(url.pathname==='/api/session')return route.fulfill({json:{mode:'console',user:'',canWrite:true}});
       if(url.pathname==='/api/state'){stateRequests++;return route.fulfill({json:state});}
       if(url.pathname==='/api/plan-workbook/status')return route.fulfill({json:{status:'absent',generation_view:state.generation_view}});
       if(url.pathname==='/api/settings') {
@@ -78,7 +79,7 @@ async function main() {
       }
       if(url.pathname.startsWith('/api/'))throw new Error('Unexpected API: '+url.pathname);
       const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
-      const contentType=name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/html';
+      const contentType=name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':name.endsWith('.png')?'image/png':name.endsWith('.ico')?'image/x-icon':'text/html';
       return route.fulfill({body:await fs.readFile(path.join(root,'web',name)),contentType});
     });
     await page.goto(origin+'/');
