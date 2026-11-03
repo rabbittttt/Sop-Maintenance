@@ -35,8 +35,8 @@ async function serviceFetch(path, options = {}, writeProbe = false) {
 function applyAccessControls() {
   const banner = $('#access-status');
   if (banner) {
-    banner.hidden = !access.gateway;
-    banner.textContent = access.canWrite ? `当前用户：${access.user}` : access.message || readOnlyMessage;
+    banner.hidden = !access.gateway || access.canWrite;
+    banner.textContent = access.canWrite ? '' : access.message || readOnlyMessage;
     banner.classList.toggle('read-only', !access.canWrite);
   }
   const ownerButton = $('#owner-btn');

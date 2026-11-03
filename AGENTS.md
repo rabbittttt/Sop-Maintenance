@@ -10,3 +10,5 @@
 - Portal users are department members with equal business capabilities. Do not add reader/editor roles or write-group checks.
 - Keep trusted identity for audit, same-origin/proxy validation, and the department access boundary. AllowWrites/allow_writes is a service-wide maintenance switch, not a user role.
 - Do not apply IIS/security configuration or deploy automatically. Portal preview writes only to isolated snapshots and never to original business data.
+
+- Do not show a full-width current-user or permission-success banner during normal portal use. Keep audit identity internally; show service-access problems only when needed.
