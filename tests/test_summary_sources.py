@@ -20,6 +20,9 @@ class SummarySourceTest(unittest.TestCase):
                         sheet.append(row)
                 book.save(root / metric["source_file"])
                 book.close()
+            # Shared inputs contain other reports; only named source workbooks
+            # may feed SOP quantities, even if an unrelated file cannot be read.
+            (root / "鸿蒙智行SKU收敛度报告.xlsx").write_bytes(b'unrelated report')
             result = extract(root, as_of="2026-10-28", version_lock_basis="source_version_quantity")
         self.assertEqual(len(result["products"]), 3)
         self.assertEqual({p["generation"] for p in result["products"]},

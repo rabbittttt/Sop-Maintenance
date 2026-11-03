@@ -6,12 +6,33 @@ from pathlib import Path
 from unittest.mock import patch
 
 import sop_data
-from sop_paths import source_directory, runtime_data_directory
+from sop_paths import source_directory, runtime_data_directory, plan_workbook_path
 from sop_refresh import SalesRefresh
 from sop_source_rules import load_merge_rules
 
 
 class DeploymentPathsTest(unittest.TestCase):
+    def test_shared_inputs_and_plan_leave_runtime_data_in_the_project(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True):
+            root = Path(folder).resolve() / 'SOP看板'
+            shared = Path(folder).resolve() / '共享数据'
+            self.assertEqual(source_directory(root), root / 'input_file')
+            self.assertEqual(plan_workbook_path(root), root / 'input_file' / 'SOP计划维护.xlsx')
+            shared.mkdir()
+            # A missing category must not silently select stale project inputs.
+            self.assertEqual(source_directory(root), shared / '订单汇总')
+            self.assertEqual(plan_workbook_path(root), shared / 'SOP计划' / 'SOP计划维护.xlsx')
+            self.assertEqual(runtime_data_directory(root), root / 'data')
+            configured = Path(folder) / 'configured-shared'
+            with patch.dict(os.environ, {'SHARED_DATA_ROOT': str(configured)}):
+                self.assertEqual(source_directory(root), configured / '订单汇总')
+                self.assertEqual(plan_workbook_path(root), configured / 'SOP计划' / 'SOP计划维护.xlsx')
+                with patch.dict(os.environ, {'SOP_SOURCE_DIR': str(root / 'explicit-sales')}):
+                    self.assertEqual(source_directory(root), root / 'explicit-sales')
+                    self.assertEqual(plan_workbook_path(root), configured / 'SOP计划' / 'SOP计划维护.xlsx')
+                with patch.dict(os.environ, {'SOP_PLAN_DIR': str(root / 'explicit-plans')}):
+                    self.assertEqual(plan_workbook_path(root), root / 'explicit-plans' / 'SOP计划维护.xlsx')
+
     def test_sources_settings_and_watcher_share_external_paths(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

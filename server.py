@@ -462,7 +462,7 @@ def main():
     parser.add_argument("--port", type=int, default=8876)
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--web-dir", type=Path, default=ROOT / "web")
-    parser.add_argument("--plan-file", type=Path, default=plan_workbook_path(ROOT))
+    parser.add_argument("--plan-file", type=Path)
     parser.add_argument("--open-browser", action="store_true", help="就绪后自动打开工作台网页")
     parser.add_argument("--gateway-config", type=Path, help="IIS代理配置，显式启用子路径和可信身份模式")
     args = parser.parse_args()
@@ -483,6 +483,8 @@ def main():
             parser.error(f"代理配置无效：{error}")
         if args.open_browser:
             parser.error("代理服务不支持 --open-browser，请通过 IIS 入口访问。")
+    if args.plan_file is None:
+        args.plan_file = plan_workbook_path(ROOT)
     url = f"http://{args.host}:{args.port}"
     # Bind before touching persistent data, so a busy port cannot start a second writer.
     try:

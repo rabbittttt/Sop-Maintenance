@@ -24,7 +24,6 @@ from sop_paths import sales_source_files, source_directory, runtime_data_directo
 
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_SOURCE_DIR = ROOT / "input_file"
 SHANGHAI = timezone(timedelta(hours=8))
 SOURCE_NAME = "鸿蒙智行销量数据汇总.xlsx"
 DAILY_SHEET = "小订首销平销by天"
@@ -578,7 +577,7 @@ def _build_lock_data(version_data, model_sales, basis):
               "source_file": "鸿蒙智行锁单选配比例分析.xlsx", "control_label": "交车锁单",
               "version_lock_basis": basis}
     meta.update({"default_metric": "locked_orders", "metrics": [metric],
-                 "source_directory": "input_file", "version_lock_basis": basis,
+                 "version_lock_basis": basis,
                  "model_lock_months": len(model_sales), "reconciliation": checks,
                  "metric_coverage": {"locked_orders": {
                      "data_from": min((r["month"] for r in locks), default=None),
@@ -645,12 +644,13 @@ def extract(source_dir=None, *, as_of=None, version_lock_basis=None):
     version_data = _extract_version_reference(source_dir, as_of=as_of)
     models = _model_monthly_locks(source_dir, as_of=as_of)
     result = _build_lock_data(version_data, models, basis)
+    result["meta"]["source_directory"] = str(source_dir.resolve())
     result["meta"]["source_schema_version"] = 2
     return result
 
 
 def refresh(source_dir=None, output_path=None, *, as_of=None, version_lock_basis=None):
-    """Refresh the local JSON atomically from input_file; never modify sources."""
+    """Refresh the local JSON atomically from configured sources; never modify them."""
     result = extract(source_dir, as_of=as_of, version_lock_basis=version_lock_basis)
     output_path = Path(output_path) if output_path is not None else runtime_data_directory(ROOT) / "sales.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -664,7 +664,7 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="只读导入销量 Excel，为 SOP 看板刷新月度实际量")
-    parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE_DIR)
+    parser.add_argument("--source-dir", type=Path, default=source_directory(ROOT))
     parser.add_argument("--output", type=Path, default=ROOT / "data" / "sales.json")
     parser.add_argument("--as-of", help="排除该日及未来数据，YYYY-MM-DD；默认北京时间今天")
     parser.add_argument("--version-lock-basis", choices=sorted(LOCK_BASIS_OPTIONS), help="model_lock_row仅采用交车锁单行；source_version_quantity仅适用于已明确确认版本数量为锁单的来源")

@@ -166,13 +166,16 @@ class SalesMetricSafetyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sop_data._resolve_lock_basis(settings_path=path)
 
-    def test_default_refresh_uses_input_directory(self):
+    def test_default_refresh_uses_configured_source_directory(self):
         source, models = fixture()
-        with patch.object(sop_data, "_extract_version_reference", return_value=source) as extract_versions, \
+        selected = Path("selected-inputs")
+        with patch.object(sop_data, "source_directory", return_value=selected), \
+             patch.object(sop_data, "_extract_version_reference", return_value=source) as extract_versions, \
              patch.object(sop_data, "_model_monthly_locks", return_value=models), \
              patch.object(sop_data, "_resolve_lock_basis", return_value="unconfirmed"):
-            sop_data.extract()
-        self.assertEqual(extract_versions.call_args.args[0], sop_data.ROOT / "input_file")
+            result = sop_data.extract()
+        self.assertEqual(extract_versions.call_args.args[0], selected)
+        self.assertEqual(result["meta"]["source_directory"], str(selected.resolve()))
 
 
 if __name__ == "__main__":

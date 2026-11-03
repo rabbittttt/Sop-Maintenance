@@ -1,6 +1,7 @@
 """Workbook sync tests use synthetic OOXML fixtures; production authoring uses artifact-tool."""
 import io
 import json
+import os
 import tempfile
 import unittest
 import zipfile
@@ -11,6 +12,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from sop_store import SOPStore, TZ
+from sop_paths import plan_workbook_path
 from sop_workbook import WorkbookSync, _annual_layout, _continuous_layout
 
 NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -180,6 +182,22 @@ class WorkbookSyncTest(unittest.TestCase):
         self.sync.sync()
         self.assertIsNone(self.current()["sop"])
         self.assertEqual(self.current()["revision"], 2)
+
+    def test_shared_plan_writes_do_not_create_a_project_input_copy(self):
+        project = self.root / "SOP看板"
+        shared = self.root / "共享数据"
+        shared.mkdir()
+        with patch.dict(os.environ, {}, clear=True):
+            self.path = plan_workbook_path(project)
+        self.sync = WorkbookSync(self.store, self.path, writer=fixture_writer, auto_create=False)
+        self.assertEqual(self.sync.sync()["status"], "absent")
+        self.assertEqual(self.sync.sync(force_export=True)["status"], "synced")
+        before = self.path.read_bytes()
+        self.save(sop=123)
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        self.assertNotEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.path, shared.resolve() / "SOP计划" / "SOP计划维护.xlsx")
+        self.assertFalse((project / "input_file" / "SOP计划维护.xlsx").exists())
 
     def test_unchanged_poll_keeps_last_sync_time(self):
         initial = self.sync.sync()

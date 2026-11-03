@@ -10,6 +10,8 @@
 
 `server.py --gateway-config <配置文件>` 显式启用前缀、同源嵌入和可信代理模式。配置包含 `base_path`、`public_origin`、`proxy_secret_env`、`allow_writes`，以及可选的 `data_dir`、`source_dir`、`shared_config`、`plan_file` 绝对路径。
 
+网关 `plan_file` 保持显式优先，现有部署将计划表放在 `source_dir` 内时，应继续填写该计划表的绝对路径；只配置 `source_dir` 仅选择销售输入，不隐式改写计划位置。未提供 `plan_file` 或 `--plan-file` 时才按 `SOP_PLAN_DIR` / 共享计划目录 / 独立 `input_file` 选择默认维护表。
+
 后端仅接受回环代理、有效随机 key 和可信用户，POST 还校验 Origin。部门成员统一使用业务功能，不区分只读/可写角色，不检查额外写入域组。新部署配置显式设置 `AllowWrites: true`（IIS 桥接）与 `allow_writes: true`（后端）；开关只用于全服务维护暂停，未配置的后端仍保持关闭写入。前端探测服务状态，连接校验失败或全局暂停时禁用写操作。服务端覆盖客户端自报的维护人，导入同样记录可信操作人。IIS Windows 身份桥接源码位于 `integration/iis/SopIdentityBridge.cs`，由当前项目的发布产物提供，门户不保留第二份身份模块源码。
 
 门户本地预览直接从本仓库启动 Python，只将业务数据在线备份到忽略的临时目录。预览允许写入隔离快照，重启创建新快照；原数据库、原始 Excel 和维护表不会被预览写入。独立模式和代理模式共用同一套业务实现。

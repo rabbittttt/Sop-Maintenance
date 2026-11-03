@@ -5,11 +5,14 @@ import json
 import sys
 import openpyxl
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from sop_paths import source_directory
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
-    parser.add_argument("source", nargs="?", default="input_file")
+    parser.add_argument("source", nargs="?", default=source_directory(ROOT))
     parser.add_argument("--file", default="")
     parser.add_argument("--sheet", default="")
     parser.add_argument("--rows", type=int, default=12)
