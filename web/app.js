@@ -8,9 +8,9 @@ const serviceBase = (() => {
   const directory = new URL('.', script || location.href).pathname;
   return directory === '/' ? '' : directory.replace(/\/$/, '');
 })();
-const access = {gateway:!!serviceBase,canWrite:!serviceBase,user:'',message:serviceBase?'正在确认访问权限…':''};
+const access = {gateway:!!serviceBase,canWrite:!serviceBase,user:'',message:serviceBase?'正在连接业务服务…':''};
 const writeActions = new Set(['grid-save','grid-add','manage-products','new-product','rename-model','open-workbook','sync-workbook','resolve-db','resolve-workbook','edit-first','bulk-plan','export-plan','import-plan','detail-edit','edit-shipments','save-settings','refresh-sales','create-snapshot']);
-const readOnlyMessage = '当前为只读访问。计划维护、导入、生成Excel及规则修改需由管理员配置写入权限。';
+const readOnlyMessage = '当前服务暂停写入或连接校验未通过，请稍后重试或联系维护人员。部门成员使用相同的业务功能。';
 function serviceUrl(path) {
   if (typeof path !== 'string' || !path.startsWith('/api/') || /[\\\r\n]/.test(path)) throw new Error('无效的业务接口地址');
   return serviceBase + path;
@@ -36,7 +36,7 @@ function applyAccessControls() {
   const banner = $('#access-status');
   if (banner) {
     banner.hidden = !access.gateway;
-    banner.textContent = access.canWrite ? `当前用户：${access.user} · 已获得计划维护权限` : access.message || readOnlyMessage;
+    banner.textContent = access.canWrite ? `当前用户：${access.user}` : access.message || readOnlyMessage;
     banner.classList.toggle('read-only', !access.canWrite);
   }
   const ownerButton = $('#owner-btn');
@@ -81,7 +81,7 @@ async function initializeAccess() {
   } catch {
     // A root-only legacy console has no session API. Subpath deployments fail closed.
     access.canWrite = !serviceBase && !access.gateway;
-    access.message = '无法确认企业登录或写入权限，当前仅允许查看。请稍后刷新或联系管理员。';
+    access.message = '暂时无法确认登录信息或服务状态，当前仅允许查看。请稍后刷新或联系维护人员。';
   }
   applyAccessControls();
 }
@@ -895,8 +895,8 @@ function editShipments(id=matchProduct||products().find(p=>!p.read_only)?.id) {
 function dataPage() {
   const meta=state.meta,sources=state.sources?.length?state.sources:(meta.source_files||[]),q=meta.quality||[];
   $('#app').innerHTML=heading('数据来源、Excel同步与计划规则。',button('来源与停用管理','manage-products')+button(state.workbook_sync?.status==='absent'?'创建维护Excel':'打开维护Excel','open-workbook')+(state.workbook_sync?.status==='absent'?'':button('同步Excel','sync-workbook'))+button('刷新销量文件','refresh-sales','primary'))+
-    `<div class="two-col"><section class="card"><div class="panel-head"><div><h2>销量数据接入</h2><p>只更新历史参考，不覆盖人工计划</p></div><span class="badge good">已接入</span></div><div class="card-body"><dl class="info-list"><dt>文件目录</dt><dd>项目目录 / input_file</dd><dt>业务数据截至</dt><dd>${esc(meta.data_through||'待确认')}</dd><dt>自动更新</dt><dd>${esc(state.source_refresh?.message||'原始文件每分钟检查，保存稳定后自动读取')}</dd><dt>最近读取</dt><dd>${dateText(meta.generated_at)}</dd><dt>版本数量</dt><dd>${state.products.length} 个</dd><dt>参考口径</dt><dd>${meta.metrics.map(m=>esc(m.label)).join('、')}</dd></dl><h3>来源文件</h3><ul class="source-list">${sources.map(s=>`<li>${esc(typeof s==='string'?s:s.file||s.name||s.path||JSON.stringify(s))}${s.sheet?`<small>${esc(s.sheet)}</small>`:''}</li>`).join('')}</ul>${(meta.notes||[]).map(n=>`<p class="form-help">${esc(n)}</p>`).join('')}</div></section><section class="card"><div class="panel-head"><div><h2>计划与快照规则</h2><p>所有日期与截点使用北京时间</p></div></div><div class="card-body"><dl class="info-list"><dt>维护颗粒度</dt><dd>品牌 → 车型＋年款 × 月份；版本可选</dd><dt>本月计划口径</dt><dd>全月总量（含已发生部分）</dd><dt>年度扩展</dt><dd>每年9月开放到次年12月</dd><dt>当前计划截止</dt><dd>${shortMonth(state.plan_end)}</dd><dt>每天保存</dt><dd>24:00；周日24点快照同时用于考核</dd><dt>提前0周</dt><dd>月初周按周一至周日：月内超过4天取上周日，否则取当周日。2027年1月取1月3日24点。</dd></dl><label class="checkbox-field"><input id="bridge-toggle" type="checkbox" ${state.settings.bridge_m6!==false?'checked':''}>7、8月补足M+6（7月到次年1月，8月到次年2月）</label><p class="form-help">已确认7、8月补足M+6；每年9月扩展到次年12月。${access.gateway?'操作人由企业登录身份确定，服务端校验写入权限并留存操作记录。':'维护人姓名用于留痕，本机版不提供账号身份认证。'}</p>${button('保存规则','save-settings')}</div></section></div>`+
-    `<section class="card page-section"><div class="panel-head"><div><h2>数据检查与口径说明</h2><p>显示来源实际包含的内容，不用推算代替历史数据</p></div></div><div class="card-body">${q.length?q.map(v=>`<div class="quality-row"><span class="badge ${v.status==='ok'||v.status==='passed'?'good':'neutral'}">${esc(v.level==='warning'?'待核对':v.status||'说明')}</span><span>${esc(typeof v==='string'?v:v.message||v.name||JSON.stringify(v))}</span></div>`).join(''):'<p>数据读取已完成。详细汇总与映射说明见来源记录。</p>'}<div class="callout">实际发货量由SP或IoC单独提供；预测销量、SOP计划量由负责人维护。未维护的数据不会自动补0。</div></div></section><section class="card page-section"><div class="panel-head"><div><h2>运行与留存</h2><p>${access.gateway?'由内网服务统一运行，浏览器页面可以关闭':'保持工作台命令窗口运行，浏览器页面可以关闭'}</p></div></div><div class="card-body"><p>${access.gateway?'内网服务由管理员维护，访问者无需运行本机命令窗口。服务运行期间自动保存每日快照；停机后按已留存修改记录还原截点并标注实际生成时间，不补造上线前历史。':'双击“启动工作台.cmd”运行，关闭命令窗口或按Ctrl+C即停止。运行期间自动保存每日快照，电脑关机或关闭工作台后无法实时执行；下次启动会依据修改日志还原截点，并标注实际生成时间。首次启用之前的计划历史不补造。'}</p><p class="form-help">${access.gateway?'计划与修改记录集中保存在服务器的数据目录；表格是同一数据的另一维护入口。访问和写入权限由内网平台及业务服务执行。':'计划与修改记录保存在本项目的 data/sop.sqlite3，表格只是同一数据的另一维护入口。需要多位同事共同维护时，应将同一服务部署到内网主机并配置身份访问。'}</p></div></section>`;
+    `<div class="two-col"><section class="card"><div class="panel-head"><div><h2>销量数据接入</h2><p>只更新历史参考，不覆盖人工计划</p></div><span class="badge good">已接入</span></div><div class="card-body"><dl class="info-list"><dt>文件目录</dt><dd>项目目录 / input_file</dd><dt>业务数据截至</dt><dd>${esc(meta.data_through||'待确认')}</dd><dt>自动更新</dt><dd>${esc(state.source_refresh?.message||'原始文件每分钟检查，保存稳定后自动读取')}</dd><dt>最近读取</dt><dd>${dateText(meta.generated_at)}</dd><dt>版本数量</dt><dd>${state.products.length} 个</dd><dt>参考口径</dt><dd>${meta.metrics.map(m=>esc(m.label)).join('、')}</dd></dl><h3>来源文件</h3><ul class="source-list">${sources.map(s=>`<li>${esc(typeof s==='string'?s:s.file||s.name||s.path||JSON.stringify(s))}${s.sheet?`<small>${esc(s.sheet)}</small>`:''}</li>`).join('')}</ul>${(meta.notes||[]).map(n=>`<p class="form-help">${esc(n)}</p>`).join('')}</div></section><section class="card"><div class="panel-head"><div><h2>计划与快照规则</h2><p>所有日期与截点使用北京时间</p></div></div><div class="card-body"><dl class="info-list"><dt>维护颗粒度</dt><dd>品牌 → 车型＋年款 × 月份；版本可选</dd><dt>本月计划口径</dt><dd>全月总量（含已发生部分）</dd><dt>年度扩展</dt><dd>每年9月开放到次年12月</dd><dt>当前计划截止</dt><dd>${shortMonth(state.plan_end)}</dd><dt>每天保存</dt><dd>24:00；周日24点快照同时用于考核</dd><dt>提前0周</dt><dd>月初周按周一至周日：月内超过4天取上周日，否则取当周日。2027年1月取1月3日24点。</dd></dl><label class="checkbox-field"><input id="bridge-toggle" type="checkbox" ${state.settings.bridge_m6!==false?'checked':''}>7、8月补足M+6（7月到次年1月，8月到次年2月）</label><p class="form-help">已确认7、8月补足M+6；每年9月扩展到次年12月。${access.gateway?'部门成员均可维护计划；操作人由企业登录身份确定并留存操作记录。':'维护人姓名用于留痕，本机版不提供账号身份认证。'}</p>${button('保存规则','save-settings')}</div></section></div>`+
+    `<section class="card page-section"><div class="panel-head"><div><h2>数据检查与口径说明</h2><p>显示来源实际包含的内容，不用推算代替历史数据</p></div></div><div class="card-body">${q.length?q.map(v=>`<div class="quality-row"><span class="badge ${v.status==='ok'||v.status==='passed'?'good':'neutral'}">${esc(v.level==='warning'?'待核对':v.status||'说明')}</span><span>${esc(typeof v==='string'?v:v.message||v.name||JSON.stringify(v))}</span></div>`).join(''):'<p>数据读取已完成。详细汇总与映射说明见来源记录。</p>'}<div class="callout">实际发货量由SP或IoC单独提供；预测销量、SOP计划量由负责人维护。未维护的数据不会自动补0。</div></div></section><section class="card page-section"><div class="panel-head"><div><h2>运行与留存</h2><p>${access.gateway?'由内网服务统一运行，浏览器页面可以关闭':'保持工作台命令窗口运行，浏览器页面可以关闭'}</p></div></div><div class="card-body"><p>${access.gateway?'内网服务由管理员维护，访问者无需运行本机命令窗口。服务运行期间自动保存每日快照；停机后按已留存修改记录还原截点并标注实际生成时间，不补造上线前历史。':'双击“启动工作台.cmd”运行，关闭命令窗口或按Ctrl+C即停止。运行期间自动保存每日快照，电脑关机或关闭工作台后无法实时执行；下次启动会依据修改日志还原截点，并标注实际生成时间。首次启用之前的计划历史不补造。'}</p><p class="form-help">${access.gateway?'计划与修改记录集中保存在服务器的数据目录；表格是同一数据的另一维护入口。部门成员使用相同的查看、维护和导入导出功能，访问范围由内网入口控制。':'计划与修改记录保存在本项目的 data/sop.sqlite3，表格只是同一数据的另一维护入口。需要多位同事共同维护时，应将同一服务部署到内网主机并配置身份访问。'}</p></div></section>`;
 }
 async function renderPage() {
   $('#page-title').textContent=titles[page];

@@ -175,6 +175,17 @@ class GatewayHTTPTest(unittest.TestCase):
             self.assertEqual(request(server, "/sop/api/write-access", method="POST")[0], 200)
             self.assertEqual(store.saved, [])
 
+    def test_department_members_share_writes_and_keep_distinct_audit_owners(self):
+        with running(writes=True) as (server, store, _):
+            for principal in ("EXAMPLE\\alice", "EXAMPLE\\bob"):
+                headers = {"X-SOP-User": principal}
+                code, _, body = request(server, "/sop/api/session", headers=headers)
+                self.assertEqual(code, 200)
+                self.assertTrue(json.loads(body)["canWrite"])
+                self.assertEqual(request(server, "/sop/api/write-access", method="POST", headers=headers)[0], 200)
+                self.assertEqual(request(server, "/sop/api/plans", method="POST", body={"owner": "forged", "changes": []}, headers=headers)[0], 200)
+            self.assertEqual([row["owner"] for row in store.saved], ["EXAMPLE\\alice", "EXAMPLE\\bob"])
+
     def test_owner_is_server_attributed_and_audited(self):
         with running(writes=True) as (server, store, _):
             payload = {"owner": "forged", "changes": [{"owner": "forged too", "sop": 7}]}

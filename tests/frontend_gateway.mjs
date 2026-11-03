@@ -35,27 +35,27 @@ let f=fixture();
 assert.equal(f.run("serviceUrl('/api/history?product_id=a%2Fb&month=2026-11')"),'/sop/api/history?product_id=a%2Fb&month=2026-11');
 assert.equal(f.run("serviceUrl('/api/snapshots/12/excel')"),'/sop/api/snapshots/12/excel');
 assert.throws(()=>f.run("serviceUrl('https://other.example/api/state')"),/无效/);
-f.respond('/api/session',200,{mode:'gateway',user:'CORP\\reader',canWrite:false});
+f.respond('/api/session',200,{mode:'gateway',user:'CORP\\member',canWrite:false});
 await f.run('initializeAccess()');
 assert.equal(f.run('access.canWrite'),false);
-assert.equal(f.run('owner'),'CORP\\reader','The server identity replaces the browser owner');
-assert.equal(f.requests.length,1,'Read-only configuration does not probe write access');
-assert.match(f.nodes.get('#access-status').textContent,/只读/);
+assert.equal(f.run('owner'),'CORP\\member','The server identity replaces the browser owner');
+assert.equal(f.requests.length,1,'Service maintenance pause does not probe write access');
+assert.match(f.nodes.get('#access-status').textContent,/暂停写入/);
 assert.equal(f.nodes.get('#owner-btn').disabled,true);
 assert.equal(f.nodes.get('#grid-owner').readOnly,true);
-assert.equal(f.nodes.get('#grid-owner').value,'CORP\\reader');
+assert.equal(f.nodes.get('#grid-owner').value,'CORP\\member');
 assert.equal(f.controls[0].disabled,true);
-assert.equal(f.controls[1].disabled,true,'POST Excel generation is disabled without write permission');
+assert.equal(f.controls[1].disabled,true,'POST Excel generation is disabled during a global write pause');
 assert.equal(f.controls[2].disabled,true);
 assert.equal(f.controls[3].disabled,false,'Browser-only saved views remain available');
 assert.equal(f.controls[4].disabled,true);
 assert.equal(f.controls[5].disabled,true);
 assert.equal(f.controls[6].disabled,true);
 const before=f.requests.length;
-await assert.rejects(f.run("api('/api/plans',{owner:'spoofed'})"),/只读/);
-await assert.rejects(f.run("serviceFetch('/api/plans/import-xlsx',{method:'POST',body:'{}'})"),/只读/);
-assert.throws(()=>f.run('bulkPlan()'),/只读/);
-assert.equal(f.requests.length,before,'No mutating request leaves a read-only UI');
+await assert.rejects(f.run("api('/api/plans',{owner:'spoofed'})"),/暂停写入/);
+await assert.rejects(f.run("serviceFetch('/api/plans/import-xlsx',{method:'POST',body:'{}'})"),/暂停写入/);
+assert.throws(()=>f.run('bulkPlan()'),/暂停写入/);
+assert.equal(f.requests.length,before,'No mutating request leaves a paused service UI');
 assert.match(f.run("button('保存','save-settings')"),/disabled/);
 assert.doesNotMatch(f.run("button('恢复隐藏行','rows-restore')"),/disabled/);
 f.respond('/api/state',200,{products:[]});
@@ -69,7 +69,7 @@ f.respond('/api/write-access',403,{error:'forbidden'});
 await f.run('initializeAccess()');
 assert.equal(f.run('access.canWrite'),false);
 assert.equal(f.requests.at(-1).options.method,'POST');
-assert.match(f.nodes.get('#access-status').textContent,/只读/);
+assert.match(f.nodes.get('#access-status').textContent,/暂停写入/);
 
 f=fixture();
 f.respond('/api/session',200,{mode:'gateway',user:'CORP\\planner',canWrite:true});
@@ -83,11 +83,11 @@ assert.match(f.nodes.get('#access-status').textContent,/CORP\\planner/);
 await f.run("api('/api/plans',{owner:'CORP\\planner',changes:[]})");
 assert.equal(f.requests.at(-1).path,'/sop/api/plans');
 f.respond('/api/plans',403,{error:'permission revoked'});
-await assert.rejects(f.run("api('/api/plans',{changes:[]})"),/只读/);
+await assert.rejects(f.run("api('/api/plans',{changes:[]})"),/暂停写入/);
 assert.equal(f.run('access.canWrite'),false,'Permission revocation locks subsequent edits');
 assert.equal(f.controls[0].disabled,true);
 
-for(const session of [{mode:'console',canWrite:true},{mode:'gateway',canWrite:true},{mode:'gateway',user:'CORP\\reader',canWrite:'yes'},null]) {
+for(const session of [{mode:'console',canWrite:true},{mode:'gateway',canWrite:true},{mode:'gateway',user:'CORP\\member',canWrite:'yes'},null]) {
   f=fixture();f.respond('/api/session',200,session);await f.run('initializeAccess()');
   assert.equal(f.run('access.canWrite'),false,'Malformed or mismatched sessions fail closed under a subpath');
 }
@@ -101,4 +101,4 @@ assert.equal(f.run('serviceBase'),'');assert.equal(f.run('access.canWrite'),true
 assert.equal(f.run('owner'),'client-provided-owner');
 assert.equal(f.nodes.get('#access-status').hidden,true);
 
-console.log('PASS: scoped API/Excel transport, gateway session checks, IIS write probe, fail-closed read-only UI, trusted owner display, permission revocation and legacy console.');
+console.log('PASS: scoped API/Excel transport, gateway session checks, IIS write probe, fail-closed paused service UI, trusted owner display, permission revocation and legacy console.');

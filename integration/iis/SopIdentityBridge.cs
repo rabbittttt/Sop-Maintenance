@@ -17,7 +17,7 @@ namespace DataPlatform
     {
         public sealed class BridgeConfig
         {
-            public string[] WriteGroups { get; set; }
+            public bool? AllowWrites { get; set; }
             public string ProxySecretPath { get; set; }
             public string PublicOrigin { get; set; }
         }
@@ -61,7 +61,7 @@ namespace DataPlatform
                 if (String.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path))
                     throw new ConfigurationErrorsException("Missing proxy configuration.");
                 BridgeConfig config = new JavaScriptSerializer().Deserialize<BridgeConfig>(File.ReadAllText(path, Encoding.UTF8));
-                if (config == null || config.WriteGroups == null || !Path.IsPathRooted(config.ProxySecretPath ?? ""))
+                if (config == null || !config.AllowWrites.HasValue || !Path.IsPathRooted(config.ProxySecretPath ?? ""))
                     throw new ConfigurationErrorsException("Invalid proxy configuration.");
                 Uri origin;
                 if (!Uri.TryCreate(config.PublicOrigin, UriKind.Absolute, out origin) ||
@@ -81,10 +81,10 @@ namespace DataPlatform
                         Deny(context, 403, "Request origin is not permitted.");
                         return;
                     }
-                    WindowsPrincipal principal = new WindowsPrincipal(identity);
-                    if (!config.WriteGroups.Any(group => !String.IsNullOrWhiteSpace(group) && principal.IsInRole(group)))
+                    // All admitted department members share the same write policy.
+                    if (!config.AllowWrites.Value)
                     {
-                        Deny(context, 403, "This account has read-only SOP access.");
+                        Deny(context, 403, "SOP writes are temporarily disabled for all users.");
                         return;
                     }
                 }
