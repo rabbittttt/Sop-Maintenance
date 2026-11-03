@@ -254,7 +254,6 @@ async function load(render = true) {
   if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');
   const freshState=await api('/api/state');if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');state=freshState;generationViewError=state.generation_view?.error||'';indexData();restoreInitialView();
   target ||= state.current_month; matchMonth ||= shift(state.current_month,-1); metric = 'locked_orders';
-  $('#current-time').textContent = `北京时间 ${dateText(state.now)}`;
   const ob = $('#owner-btn'); if (ob) ob.textContent = owner || '设置维护人';
   if(render) await renderPage();
   applyAccessControls();
