@@ -13,3 +13,6 @@
 /scripts/node_modules/
 node_modules/
 ~$*.xlsx
+
+# Local update helper.
+update_script.bat
