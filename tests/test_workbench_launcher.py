@@ -44,6 +44,7 @@ class WorkbenchLauncherTest(unittest.TestCase):
         self.root.mkdir()
         for source in ROOT.glob("*.py"):
             shutil.copy2(source, self.root / source.name)
+        shutil.copytree(ROOT / "sop", self.root / "sop", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         for name in ("启动工作台.cmd", "start-sop.ps1"):
             shutil.copy2(ROOT / name, self.root / name)
         (self.root / "web").mkdir()
@@ -109,7 +110,7 @@ class WorkbenchLauncherTest(unittest.TestCase):
             if process.poll() is not None:
                 self.fail("Launcher exited: " + (self.root / "launch.log").read_text(encoding="utf-8", errors="replace"))
             time.sleep(.1)
-        self.fail("Workbench did not become ready")
+        self.fail("Workbench did not become ready: " + (self.root / "launch.log").read_text(encoding="utf-8", errors="replace")[-4000:])
 
     def launch(self):
         output = (self.root / "launch.log").open("ab")
@@ -189,7 +190,10 @@ class WorkbenchLauncherTest(unittest.TestCase):
     def test_legacy_handover_checks_identity_before_stopping_process(self):
         source = self.root / "server.py"
         current = source.read_text(encoding="utf-8")
-        source.write_text(current.replace('launch_mode = "console"', 'launch_mode = None'), encoding="utf-8")
+        legacy_source = current.replace('launch_mode = "console"', 'launch_mode = None').replace(
+            'server.launch_mode = "gateway" if gateway else "console"',
+            'server.launch_mode = "gateway" if gateway else None')
+        source.write_text(legacy_source, encoding="utf-8")
         output = (self.root / "launch.log").open("ab")
         self.handles.append(output)
         legacy = subprocess.Popen([sys.executable, "-u", str(source), "--port", str(self.port)],

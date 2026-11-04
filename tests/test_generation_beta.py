@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sop_source_rules import MergeRuleError, generation_model_key, load_merge_rules, project_generation_sources
+from sop.source_rules import MergeRuleError, generation_model_key, load_merge_rules, project_generation_sources
 
 
 class GenerationBetaTest(unittest.TestCase):
@@ -141,7 +141,7 @@ class GenerationBetaTest(unittest.TestCase):
                        "尚界 SHB 2026款汇总": ["尚界 Z7 2026款", "尚界 Z7T 2026款"],
                        "享界 X4 2026款汇总": ["享界 S9 2026款", "享界 S9T 2026款"]}
         # Parse source model names with the real source parser, independently of projection matching.
-        from sop_data import _product
+        from sop.data import _product
         products = [{**_product(name, ""), "version": "Max"} for name in names]
         data = self.source(products)
         rules = self.rules()

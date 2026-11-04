@@ -14,11 +14,12 @@ import threading
 import uuid
 from pathlib import Path
 
-from sop_brand import brand_order_key
-from sop_plan_scope import is_model_plan
-from sop_runtime import (ArtifactDependencyError, ensure_artifact_tool,
+from .paths import PROJECT_ROOT
+from .brand import brand_order_key
+from .plan_scope import is_model_plan
+from .runtime import (ArtifactDependencyError, ensure_artifact_tool,
                          missing_artifact_module, node_executable, python_excel_requested)
-from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, month_add, month_range, stamp
+from .store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, month_add, month_range, stamp
 
 SCHEMA_VERSION = 5
 LAYOUT_VERSION = "continuous-inline-v2"
@@ -299,7 +300,7 @@ class WorkbookSync:
     def __init__(self, store, path, writer=None, root=None, auto_create=True):
         self.store = store
         self.path = Path(path).resolve()
-        self.root = Path(root or Path(__file__).resolve().parent).resolve()
+        self.root = Path(root or PROJECT_ROOT).resolve()
         self.writer = writer or self._node_writer
         self.auto_create = auto_create
         self.lock = threading.RLock()
@@ -333,7 +334,7 @@ class WorkbookSync:
 
     def _python_writer(self, payload):
         try:
-            from sop_xlsx_plan import write_plan_workbook
+            from .xlsx_plan import write_plan_workbook
             write_plan_workbook(payload)
         except ModuleNotFoundError as error:
             if error.name != "openpyxl":
@@ -580,7 +581,7 @@ class WorkbookSync:
         return values
 
     def _parse_inline(self, workbook, metadata, expected):
-        from sop_table import parse_inline_sheet
+        from .table import parse_inline_sheet
         if expected.get("layout_version") not in {LAYOUT_VERSION, "continuous-inline-v1"}:
             raise ValidationError("主表布局标识已被改动，请恢复原表后重试。")
         # The export token resolves to an immutable server layout. A changed

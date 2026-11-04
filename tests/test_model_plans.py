@@ -4,12 +4,12 @@ from datetime import datetime
 
 import openpyxl
 
-from sop_plan_scope import MODEL_PLAN_LABEL, is_model_plan, plan_total
-from sop_store import TZ, ValidationError
-from sop_workbook import WorkbookSync
-from sop_xlsx_plan import write_plan_workbook
-from sop_xlsx_export import write_export_workbook
-from sop_roundtrip import PlanRoundtrip
+from sop.plan_scope import MODEL_PLAN_LABEL, is_model_plan, plan_total
+from sop.store import TZ, ValidationError
+from sop.workbook import WorkbookSync
+from sop.xlsx_plan import write_plan_workbook
+from sop.xlsx_export import write_export_workbook
+from sop.roundtrip import PlanRoundtrip
 from tests import test_grid_batch as grid
 from tests.test_workbook_sync import edit_cell
 from tests.test_inline_workbook import change_rows

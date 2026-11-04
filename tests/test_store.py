@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-from sop_store import (ConflictError, SOPStore, TZ, ValidationError, WEIGHTS,
+from sop.store import (ConflictError, SOPStore, TZ, ValidationError, WEIGHTS,
                        cutoff_for, horizon, month_add, stamp, sunday_before, week_zero_for_month)
 from server import make_handler
 

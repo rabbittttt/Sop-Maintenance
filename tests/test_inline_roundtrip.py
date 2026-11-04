@@ -10,10 +10,10 @@ from datetime import datetime
 from pathlib import Path
 import openpyxl
 
-from sop_roundtrip import PlanRoundtrip
-from sop_export import PlanExport
-from sop_store import SOPStore, TZ, ValidationError
-from sop_workbook import WorkbookSync
+from sop.roundtrip import PlanRoundtrip
+from sop.export import PlanExport
+from sop.store import SOPStore, TZ, ValidationError
+from sop.workbook import WorkbookSync
 from tests.test_roundtrip import download_fixture, export_body
 from tests.test_workbook_sync import NS, col_name, edit_cell, fixture_writer
 

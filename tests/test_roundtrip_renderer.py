@@ -7,7 +7,7 @@ from pathlib import Path
 
 import openpyxl
 
-from tests.test_export_workbook import NODE, OUT, ROOT, current_input_payload, generate, payload
+from tests.test_export_workbook import NODE, NODE_AVAILABLE, OUT, ROOT, current_input_payload, generate, payload
 
 
 def add_roundtrip(body):
@@ -40,7 +40,7 @@ def add_roundtrip(body):
     return body
 
 
-@unittest.skipUnless(NODE.is_file(), "Bundled spreadsheet runtime unavailable")
+@unittest.skipUnless(NODE_AVAILABLE, "Bundled spreadsheet runtime unavailable")
 class RoundtripRendererTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

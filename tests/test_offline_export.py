@@ -12,10 +12,10 @@ from unittest.mock import patch
 
 import openpyxl
 
-from sop_export import PlanExport
-from sop_roundtrip import PlanRoundtrip
-from sop_store import SOPStore, TZ
-from sop_workbook import WorkbookSync
+from sop.export import PlanExport
+from sop.roundtrip import PlanRoundtrip
+from sop.store import SOPStore, TZ
+from sop.workbook import WorkbookSync
 from tests.test_roundtrip import export_body
 from tests.test_workbook_sync import edit_cell
 
@@ -58,8 +58,8 @@ class OfflineExportTest(unittest.TestCase):
         return context
 
     def test_full_template_is_identical_to_maintenance_visible_sheet(self):
-        from sop_xlsx_export import write_export_workbook
-        from sop_xlsx_plan import write_plan_workbook
+        from sop.xlsx_export import write_export_workbook
+        from sop.xlsx_plan import write_plan_workbook
         from tests.test_inline_renderer import input_payload, export_payload
 
         maintenance_path = self.root / "maintenance.xlsx"
@@ -174,7 +174,7 @@ class OfflineExportTest(unittest.TestCase):
             book.close()
 
     def test_downloads_without_editable_cells_omit_empty_validation_xml(self):
-        from sop_xlsx_export import write_export_workbook
+        from sop.xlsx_export import write_export_workbook
         from tests.test_inline_renderer import export_payload
 
         for locks, versions in ((False, False), (True, False), (False, True)):

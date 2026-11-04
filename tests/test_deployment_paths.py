@@ -5,12 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import sop_data
-import sop_source_rules
+from sop import data as sop_data
+from sop import source_rules as sop_source_rules
 import server
-from sop_paths import source_directory, runtime_data_directory, plan_workbook_path
-from sop_refresh import SalesRefresh
-from sop_source_rules import load_merge_rules
+from sop.paths import source_directory, runtime_data_directory, plan_workbook_path
+from sop.refresh import SalesRefresh
+from sop.source_rules import load_merge_rules
 
 
 class DeploymentPathsTest(unittest.TestCase):
@@ -31,7 +31,7 @@ class DeploymentPathsTest(unittest.TestCase):
                     self.assertEqual(plan_workbook_path(root), parent / '共享数据' / 'SOP计划' / 'SOP计划维护.xlsx')
                 with patch.dict(os.environ, {'SOP_SOURCE_DIR': '../sales', 'SOP_PLAN_DIR': '../plans',
                                             'SOP_DATA_DIR': './state', 'SOP_SHARED_CONFIG': '../rules.py'}), \
-                     patch.object(sop_source_rules, '__file__', str(root / 'sop_source_rules.py')):
+                     patch.object(sop_source_rules, 'PROJECT_ROOT', root):
                     self.assertEqual(source_directory(root), parent / 'sales')
                     self.assertEqual(plan_workbook_path(root), parent / 'plans' / 'SOP计划维护.xlsx')
                     self.assertEqual(runtime_data_directory(root), root / 'state')
@@ -67,11 +67,11 @@ class DeploymentPathsTest(unittest.TestCase):
                 self.assertEqual(runtime_data_directory(root), deployed)
                 result = {'products': [], 'sales': [], 'meta': {'data_through': None, 'metric_coverage': {}, 'quality': []}}
                 with patch.object(sop_data, 'refresh', return_value=result) as refresh, \
-                     patch('sys.argv', ['sop_data.py']), patch('builtins.print'):
+                     patch('sys.argv', ['sop.data']), patch('builtins.print'):
                     sop_data.main()
                     self.assertEqual(refresh.call_args.args[1], deployed / 'sales.json')
                 with patch.object(sop_data, 'refresh', return_value=result) as refresh, \
-                     patch('sys.argv', ['sop_data.py', '--output', str(explicit / 'custom.json')]), patch('builtins.print'):
+                     patch('sys.argv', ['sop.data', '--output', str(explicit / 'custom.json')]), patch('builtins.print'):
                     sop_data.main()
                     self.assertEqual(refresh.call_args.args[1], explicit / 'custom.json')
             self.assertFalse((root / 'state').exists())

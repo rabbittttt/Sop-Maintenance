@@ -9,12 +9,12 @@ from unittest.mock import patch
 
 import openpyxl
 
-from sop_brand import BRAND_ORDER, brand_order_key
-from sop_roundtrip import PlanRoundtrip
-from sop_store import SOPStore, TZ
-from sop_workbook import WorkbookSync
-from sop_xlsx_export import _layout, write_export_workbook
-from sop_xlsx_plan import write_plan_workbook
+from sop.brand import BRAND_ORDER, brand_order_key
+from sop.roundtrip import PlanRoundtrip
+from sop.store import SOPStore, TZ
+from sop.workbook import WorkbookSync
+from sop.xlsx_export import _layout, write_export_workbook
+from sop.xlsx_plan import write_plan_workbook
 from tests import test_inline_renderer as fixtures
 from tests.test_workbook_sync import edit_cell
 
@@ -126,9 +126,9 @@ class BrandOrderTest(unittest.TestCase):
     def test_prior_order_imports_unsynced_changes_before_refresh(self):
         path = self.root / "maintenance.xlsx"
         with patch.dict(os.environ, {"SOP_EXCEL_ENGINE": "python"}):
-            with patch("sop_store.brand_order_key", lambda brand: brand), \
-                    patch("sop_workbook.brand_order_key", lambda brand: brand), \
-                    patch("sop_workbook.PRESENTATION_VERSION", 3):
+            with patch("sop.store.brand_order_key", lambda brand: brand), \
+                    patch("sop.workbook.brand_order_key", lambda brand: brand), \
+                    patch("sop.workbook.PRESENTATION_VERSION", 3):
                 previous = WorkbookSync(self.store, path)
                 self.assertEqual(previous.sync()["status"], "synced")
                 token, context, *_ = previous._parse(path.read_bytes())
@@ -175,7 +175,7 @@ class BrandOrderTest(unittest.TestCase):
         self.assertEqual(self.store.db.execute(
             "SELECT sop FROM plans WHERE product_id='0' AND month='2026-10'").fetchone()[0], 1)
 
-    @unittest.skipUnless(fixtures.NODE.is_file(), "Bundled spreadsheet runtime unavailable")
+    @unittest.skipUnless(fixtures.NODE_AVAILABLE, "Bundled spreadsheet runtime unavailable")
     def test_node_export_uses_same_order_and_identity_mapping(self):
         _, body = payloads(locks=True)
         with patch.object(fixtures, "OUT", self.root):

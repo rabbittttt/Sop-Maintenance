@@ -18,14 +18,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from sop_paths import plan_workbook_path, runtime_data_directory
-from sop_store import ConflictError, SOPStore, ValidationError
-from sop_workbook import WorkbookSync
-from sop_backup import SnapshotBackup
-from sop_export import ExportError, MAX_REQUEST_BYTES, PlanExport
-from sop_refresh import SalesRefresh
-from sop_source_rules import MergeRuleError
-from sop_gateway import GatewayConfig, GatewayError, attributed_body
+from sop.paths import plan_workbook_path, runtime_data_directory
+from sop.store import ConflictError, SOPStore, ValidationError
+from sop.workbook import WorkbookSync
+from sop.backup import SnapshotBackup
+from sop.export import ExportError, MAX_REQUEST_BYTES, PlanExport
+from sop.refresh import SalesRefresh
+from sop.source_rules import MergeRuleError
+from sop.gateway import GatewayConfig, GatewayError, attributed_body
 
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("sop")
@@ -77,11 +77,11 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
         nonlocal plan_roundtrip
         with roundtrip_lock:
             if plan_roundtrip is None:
-                from sop_roundtrip import PlanRoundtrip
+                from sop.roundtrip import PlanRoundtrip
                 plan_roundtrip = PlanRoundtrip(store, workbook_sync)
             return plan_roundtrip
     source_refresh = source_refresh or SalesRefresh(store, workbook_sync, root=ROOT,
-        reader=lambda **kwargs: importlib.import_module("sop_data").refresh(**kwargs))
+        reader=lambda **kwargs: importlib.import_module("sop.data").refresh(**kwargs))
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
     if port == 80:
         allowed_hosts.update({"127.0.0.1", "localhost", "[::1]"})
@@ -478,7 +478,7 @@ def runtime_options(argv=None):
             if "plan_file" in gateway.paths:
                 args.plan_file = gateway.paths["plan_file"]
             # Validate a moved deployment's rules before creating or changing data.
-            importlib.import_module("sop_source_rules").load_merge_rules()
+            importlib.import_module("sop.source_rules").load_merge_rules()
         except (ValueError, OSError) as error:
             parser.error(f"代理配置无效：{error}")
         if args.open_browser:
@@ -516,7 +516,7 @@ def main():
                             handlers=[logging.StreamHandler(), logging.FileHandler(
                                 args.data_dir / "service.err.log", encoding="utf-8")], force=True)
         if not (args.data_dir / "sales.json").exists():
-            importlib.import_module("sop_data").refresh(output_path=args.data_dir / "sales.json")
+            importlib.import_module("sop.data").refresh(output_path=args.data_dir / "sales.json")
         store = SOPStore(args.data_dir / "sop.sqlite3", args.data_dir / "sales.json")
         store.ensure_daily_snapshots()
         workbook_sync = WorkbookSync(store, args.plan_file, auto_create=False)

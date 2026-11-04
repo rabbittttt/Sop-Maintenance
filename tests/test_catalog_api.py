@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from server import make_handler
-from sop_store import SOPStore, TZ, ValidationError
+from sop.store import SOPStore, TZ, ValidationError
 
 
 class SheetSync:

@@ -15,11 +15,11 @@ import xml.etree.ElementTree as ET
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
-from sop_export import validate_export
-from sop_plan_scope import is_model_plan, plan_total
-from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, stamp, text_field
-from sop_workbook import _cell_quantity
-from sop_table import parse_inline_sheet
+from .export import validate_export
+from .plan_scope import is_model_plan, plan_total
+from .store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, stamp, text_field
+from .workbook import _cell_quantity
+from .table import parse_inline_sheet
 
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_EXPANDED_BYTES = 96 * 1024 * 1024

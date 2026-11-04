@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from sop_store import SOPStore, TZ, ValidationError
-from sop_workbook import WorkbookSync, _continuous_layout, _signature
+from sop.store import SOPStore, TZ, ValidationError
+from sop.workbook import WorkbookSync, _continuous_layout, _signature
 from tests.test_workbook_sync import fixture_writer, edit_cell, col_name
 
 

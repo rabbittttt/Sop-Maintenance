@@ -13,7 +13,7 @@ from openpyxl.styles import Protection
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from sop_xlsx_style import PLAN_TITLE, plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
+from .xlsx_style import PLAN_TITLE, plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
 _SUM_FORMULA = re.compile(r'^=IF\(COUNT\((.+)\)=0,"",SUM\(\1\)\)$')

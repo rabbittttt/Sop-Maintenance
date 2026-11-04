@@ -1,4 +1,4 @@
-// Keep this presentation order aligned with sop_brand.py.
+// Keep this presentation order aligned with sop/brand.py.
 export const BRAND_ORDER = ['智界', '享界', '尊界', '尚界', '问界'];
 const rank = new Map(BRAND_ORDER.map((brand, index) => [brand, index]));
 

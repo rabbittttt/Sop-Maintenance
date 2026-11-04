@@ -7,9 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from sop_paths import sales_source_files
-from sop_refresh import SalesRefresh
-from sop_store import SOPStore, TZ, ValidationError
+from sop.paths import sales_source_files
+from sop.refresh import SalesRefresh
+from sop.store import SOPStore, TZ, ValidationError
 
 
 class SourceRefreshTest(unittest.TestCase):

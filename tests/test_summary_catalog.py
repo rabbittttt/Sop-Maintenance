@@ -8,11 +8,11 @@ from unittest.mock import patch
 
 import openpyxl
 
-from sop_roundtrip import PlanRoundtrip
-from sop_store import SOPStore, TZ, ValidationError
-from sop_workbook import WorkbookSync
-from sop_xlsx_export import write_export_workbook
-from sop_xlsx_plan import write_plan_workbook
+from sop.roundtrip import PlanRoundtrip
+from sop.store import SOPStore, TZ, ValidationError
+from sop.workbook import WorkbookSync
+from sop.xlsx_export import write_export_workbook
+from sop.xlsx_plan import write_plan_workbook
 from tests import test_inline_renderer as fixtures
 from tests.test_workbook_sync import edit_cell
 
@@ -29,7 +29,7 @@ LOOKUP = {(p["product_id"], p["month"]): p for p in PLANS}
 
 
 def previous_view():
-    return patch("sop_store.project_generation_sources", lambda data, *args, **kwargs: (data, []))
+    return patch("sop.store.project_generation_sources", lambda data, *args, **kwargs: (data, []))
 
 
 class SummaryCatalogTest(unittest.TestCase):
@@ -41,7 +41,7 @@ class SummaryCatalogTest(unittest.TestCase):
         config.write_text("MERGE_GROUPS = " + repr({
             "问界 M5 汇总": ["问界 M5 2025款", "问界 M5 2026款"],
             "智界 S10 2026款汇总": ["智界 S10 2026款"]}), encoding="utf-8")
-        rule_patch = patch("sop_source_rules.DEFAULT_CONFIG_PATH", config)
+        rule_patch = patch("sop.source_rules.DEFAULT_CONFIG_PATH", config)
         rule_patch.start()
         self.addCleanup(rule_patch.stop)
         self.source = self.root / "sales.json"

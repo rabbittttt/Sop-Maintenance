@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 from server import make_handler
-from sop_store import SOPStore, TZ
+from sop.store import SOPStore, TZ
 from tests.test_catalog_api import SheetSync
 
 
@@ -20,7 +20,7 @@ class GenerationAPITest(unittest.TestCase):
         self.root = Path(temporary.name)
         self.config = self.root / "shared_config.py"
         self.config.write_text("MERGE_GROUPS = {'A Total': ['A One', 'A Two']}\n", encoding="utf-8")
-        rule_patch = patch("sop_source_rules.DEFAULT_CONFIG_PATH", self.config)
+        rule_patch = patch("sop.source_rules.DEFAULT_CONFIG_PATH", self.config)
         rule_patch.start()
         self.addCleanup(rule_patch.stop)
         source = self.root / "sales.json"

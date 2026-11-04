@@ -5,8 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from sop_source_rules import load_merge_rules, MergeRuleError, summary_names
-from sop_store import SOPStore, TZ, ValidationError
+from sop.source_rules import load_merge_rules, MergeRuleError, summary_names
+from sop.store import SOPStore, TZ, ValidationError
 
 
 class GenerationModeTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class GenerationModeTest(unittest.TestCase):
         self.rules = self.root / "shared_config.py"
         self.groups = {"问界 M5 2026款汇总": ["问界 M5 2025款", "问界 M5 2026款"]}
         self.write_rules()
-        self.patch = patch("sop_source_rules.DEFAULT_CONFIG_PATH", self.rules)
+        self.patch = patch("sop.source_rules.DEFAULT_CONFIG_PATH", self.rules)
         self.patch.start()
         self.addCleanup(self.patch.stop)
         products = [

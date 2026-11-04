@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-from sop_runtime import ArtifactDependencyError, ensure_artifact_tool, node_executable
+from sop.runtime import ArtifactDependencyError, ensure_artifact_tool, node_executable
 
 
 class ArtifactRuntimeTest(unittest.TestCase):

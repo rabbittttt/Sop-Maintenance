@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from sop_store import ConflictError, SOPStore, TZ, ValidationError
+from sop.store import ConflictError, SOPStore, TZ, ValidationError
 
 
 class InlineStoreTest(unittest.TestCase):

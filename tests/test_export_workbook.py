@@ -14,6 +14,7 @@ import openpyxl
 
 ROOT = Path(__file__).resolve().parents[1]
 NODE = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
+NODE_AVAILABLE = NODE.is_file() and (NODE.parent.parent / "node_modules/@oai/artifact-tool/package.json").is_file()
 OUT = ROOT / "tests/artifacts/export-layout"
 
 
@@ -138,7 +139,7 @@ def current_input_payload(name):
         return body, source, width, Path(reference)
 
 
-@unittest.skipUnless(NODE.is_file(), "Bundled spreadsheet runtime unavailable")
+@unittest.skipUnless(NODE_AVAILABLE, "Bundled spreadsheet runtime unavailable")
 class ExportWorkbookTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

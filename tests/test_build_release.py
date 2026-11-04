@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -58,6 +59,48 @@ class BuildReleaseTest(unittest.TestCase):
                 BUILDER.build_release(source, source / "release")
             self.assertFalse((source / "release").exists())
 
+    def test_package_modules_are_included_without_private_files_or_caches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(folder)
+            module = source / "sop" / "data.py"
+            module.write_text('"""Runtime sales reader."""\n', encoding="utf-8")
+            excluded = ("sop/.env", "sop/local-settings.json", "sop/__pycache__/data.cpython-310.pyc",
+                        "sop/data/private.xlsx", "sop/tests/fixture.py")
+            for name in excluded:
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"private local content")
+            output = Path(folder) / "release"
+            manifest = BUILDER.build_release(source, output)
+            names = {entry["path"] for entry in manifest["files"]}
+            self.assertEqual(names, BUILDER.REQUIRED_FILES | {"sop/data.py"})
+            self.assertEqual((output / "sop" / "data.py").read_bytes(), module.read_bytes())
+            for name in excluded:
+                self.assertFalse((output / name).exists(), name)
+
+    def test_missing_runtime_package_is_rejected_before_output_is_created(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(folder)
+            (source / "sop" / "paths.py").unlink()
+            output = Path(folder) / "release"
+            with self.assertRaisesRegex(ValueError, "sop/paths.py"):
+                BUILDER.build_release(source, output)
+            self.assertFalse(output.exists())
+
+    def test_package_symlink_is_rejected_before_output_is_created(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.source(folder)
+            external = Path(folder) / "external.py"
+            external.write_text("private linked source", encoding="utf-8")
+            try:
+                os.symlink(external, source / "sop" / "linked.py")
+            except OSError as error:
+                self.skipTest(f"This machine cannot create symlinks: {error}")
+            output = Path(folder) / "release"
+            with self.assertRaisesRegex(ValueError, "Reparse"):
+                BUILDER.build_release(source, output)
+            self.assertFalse(output.exists())
+
     def test_non_public_web_file_fails_before_output_is_created(self):
         with tempfile.TemporaryDirectory() as folder:
             source = self.source(folder)
@@ -68,7 +111,8 @@ class BuildReleaseTest(unittest.TestCase):
             self.assertFalse(output.exists())
 
     def test_path_contract_blocks_private_and_traversal_names(self):
-        for value in ("../server.py", "web/../server.py", "web/.env", "web/data/input.json", "data/sales.json", "scripts/node_modules/x.mjs", "C:/server.py", "web\\index.html"):
+        for value in ("../server.py", "web/../server.py", "web/.env", "web/data/input.json", "data/sales.json", "scripts/node_modules/x.mjs", "C:/server.py", "web\\index.html",
+                      "sop/.env", "sop/../server.py", "sop/__pycache__/store.pyc", "sop/data/private.py", "sop/tests/fixture.py"):
             with self.subTest(path=value):
                 self.assertFalse(BUILDER.allowed_release_path(value))
 

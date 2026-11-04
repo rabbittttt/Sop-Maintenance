@@ -11,9 +11,9 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from sop_store import SOPStore, TZ
-from sop_paths import plan_workbook_path
-from sop_workbook import WorkbookSync, _annual_layout, _continuous_layout
+from sop.store import SOPStore, TZ
+from sop.paths import plan_workbook_path
+from sop.workbook import WorkbookSync, _annual_layout, _continuous_layout
 
 NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
@@ -267,7 +267,7 @@ class WorkbookSyncTest(unittest.TestCase):
         self.save()
         self.sync.sync()
         edit_cell(self.path, self.cell(), 150)
-        with patch("sop_workbook.os.replace", side_effect=PermissionError("Excel open")):
+        with patch("sop.workbook.os.replace", side_effect=PermissionError("Excel open")):
             self.assertEqual(self.sync.sync()["status"], "pending")
             self.assertEqual(self.current()["sop"], 150)
             edit_cell(self.path, self.cell(), 180)
@@ -512,7 +512,7 @@ class WorkbookSyncTest(unittest.TestCase):
         old_source_cell=self.cell("b")
         self.commit_binding(target)
         restarted=WorkbookSync(self.store,self.path,writer=fixture_writer)
-        with patch("sop_workbook.os.replace",side_effect=PermissionError("Excel open")):
+        with patch("sop.workbook.os.replace",side_effect=PermissionError("Excel open")):
             self.assertEqual(restarted.sync()["status"],"pending",restarted.status())
             # The user saves an old source row while Excel still holds the old
             # workbook; even explicit zero is meaningful and cannot disappear.

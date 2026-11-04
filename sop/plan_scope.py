@@ -1,7 +1,7 @@
 """Model-year totals share the plan ledger, but never add to version totals."""
 from collections import defaultdict
 
-from sop_source_rules import normalize_generation, product_display_model
+from .source_rules import normalize_generation, product_display_model
 
 MODEL_PLAN_LABEL = "车型总量（不分版本）"
 

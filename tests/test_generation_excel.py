@@ -8,11 +8,11 @@ from unittest.mock import patch
 
 import openpyxl
 
-from sop_store import SOPStore, TZ, ValidationError
-from sop_workbook import WorkbookSync
-from sop_roundtrip import PlanRoundtrip
-from sop_xlsx_plan import write_plan_workbook
-from sop_xlsx_export import write_export_workbook
+from sop.store import SOPStore, TZ, ValidationError
+from sop.workbook import WorkbookSync
+from sop.roundtrip import PlanRoundtrip
+from sop.xlsx_plan import write_plan_workbook
+from sop.xlsx_export import write_export_workbook
 from tests import test_inline_renderer as fixtures
 from tests.test_workbook_sync import edit_cell
 
@@ -24,7 +24,7 @@ class GenerationExcelTest(unittest.TestCase):
         self.root = Path(temp.name)
         self.config = self.root / "shared_config.py"
         self.config.write_text("MERGE_GROUPS = {'智界 Combo 2026款汇总': ['智界 A 2025款', '智界 B 2026款']}\n", encoding="utf-8")
-        rules = patch("sop_source_rules.DEFAULT_CONFIG_PATH", self.config)
+        rules = patch("sop.source_rules.DEFAULT_CONFIG_PATH", self.config)
         rules.start(); self.addCleanup(rules.stop)
         products = [{"id": pid, "brand": "智界", "model": model, "version": "Max", "generation": generation}
                     for pid, model, generation in [("a", "A", "智界 A 2025款"), ("b", "B", "智界 B 2026款"),
@@ -142,7 +142,7 @@ class GenerationExcelTest(unittest.TestCase):
         self.beta_members()
         # The prior release exported model labels without a year. Its trusted
         # row identities must remain importable after year-specific display.
-        with patch("sop_source_rules._display_labels", side_effect=lambda data: data):
+        with patch("sop.source_rules._display_labels", side_effect=lambda data: data):
             old_service, old_path, _ = self.download("beta-detail")
         book = openpyxl.load_workbook(old_path)
         old_spec = fixtures.manifest(book)
@@ -264,7 +264,7 @@ class GenerationExcelTest(unittest.TestCase):
         self.assertEqual(self.sync.sync()["status"], "synced")
         self.assertEqual({p["model"] for p in self.spec()["products"]}, {"Combo 2026款", "B 2026款", "C 2026款"})
 
-    @unittest.skipUnless(fixtures.NODE.is_file(), "Bundled spreadsheet runtime unavailable")
+    @unittest.skipUnless(fixtures.NODE_AVAILABLE, "Bundled spreadsheet runtime unavailable")
     def test_node_writer_keeps_aggregate_cells_readonly_and_roundtrippable(self):
         self.summary()
         payload, _ = self.sync._context()

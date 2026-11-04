@@ -10,9 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from sop_roundtrip import PlanRoundtrip, MAX_UPLOAD_BYTES
-from sop_store import ConflictError, SOPStore, TZ, ValidationError
-from sop_workbook import WorkbookSync
+from sop.roundtrip import PlanRoundtrip, MAX_UPLOAD_BYTES
+from sop.store import ConflictError, SOPStore, TZ, ValidationError
+from sop.workbook import WorkbookSync
 from tests.test_workbook_sync import NS, col_name, edit_cell, fixture_writer
 
 
@@ -363,7 +363,7 @@ class RoundtripTest(unittest.TestCase):
                 archive.writestr("xl/workbook.xml", original.read("xl/workbook.xml"))
         with self.assertRaisesRegex(ValidationError, "重复"):
             self.service.import_content(buffer.getvalue())
-        with patch("sop_roundtrip.MAX_EXPANDED_BYTES", 1):
+        with patch("sop.roundtrip.MAX_EXPANDED_BYTES", 1):
             with self.assertRaisesRegex(ValidationError, "解压后过大"):
                 self.import_file()
 

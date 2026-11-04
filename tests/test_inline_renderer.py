@@ -13,10 +13,11 @@ from unittest.mock import patch
 
 import openpyxl
 
-from sop_workbook import _inline_layout
+from sop.workbook import _inline_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 NODE = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
+NODE_AVAILABLE = NODE.is_file() and (NODE.parent.parent / "node_modules/@oai/artifact-tool/package.json").is_file()
 OUT = ROOT / "tests/artifacts/inline-layout"
 MONTHS = [f"{year}-{month:02}" for year in (2026, 2027) for month in range(1, 13)]
 PRODUCTS = [{"id": "a", "brand": "问界", "model": "M5", "version": "Max", "active": True},
@@ -90,7 +91,7 @@ def manifest(book):
     return json.loads("".join(row[1] for row in meta.iter_rows(min_row=6, values_only=True)))
 
 
-@unittest.skipUnless(NODE.is_file(), "Bundled spreadsheet runtime unavailable")
+@unittest.skipUnless(NODE_AVAILABLE, "Bundled spreadsheet runtime unavailable")
 class InlineRendererTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

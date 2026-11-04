@@ -8,10 +8,10 @@ from pathlib import Path
 
 import openpyxl
 
-from sop_export import PlanExport
-from sop_roundtrip import PlanRoundtrip
-from sop_store import SOPStore, TZ
-from sop_workbook import WorkbookSync
+from sop.export import PlanExport
+from sop.roundtrip import PlanRoundtrip
+from sop.store import SOPStore, TZ
+from sop.workbook import WorkbookSync
 from tests.test_workbook_sync import fixture_writer, edit_cell
 from tests.test_inline_workbook import change_rows
 

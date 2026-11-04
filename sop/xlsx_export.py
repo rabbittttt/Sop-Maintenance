@@ -15,9 +15,9 @@ from openpyxl.styles import Alignment, Protection
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from sop_brand import brand_order_key
-from sop_plan_scope import MODEL_PLAN_LABEL
-from sop_xlsx_style import PLAN_TITLE, plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
+from .brand import brand_order_key
+from .plan_scope import MODEL_PLAN_LABEL
+from .xlsx_style import PLAN_TITLE, plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
 MAX_SAFE_INTEGER = 2**53 - 1

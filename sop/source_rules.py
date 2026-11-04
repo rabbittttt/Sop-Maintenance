@@ -6,10 +6,10 @@ import re
 import unicodedata
 from collections import defaultdict
 from pathlib import Path
-from sop_paths import project_path
+from .paths import PROJECT_ROOT, project_path
 
 CONFIG_RELATIVE_PATH = Path("..") / "订单分析" / "scripts" / "config" / "shared_config.py"
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / CONFIG_RELATIVE_PATH
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / CONFIG_RELATIVE_PATH
 MODES = {"detail", "summary"}
 
 
@@ -115,7 +115,7 @@ def _display_labels(data):
 def load_merge_rules(path=None):
     """Read only the literal MERGE_GROUPS assignment; never execute the file."""
     path = Path(path) if path is not None else project_path(
-        Path(__file__).resolve().parent, os.environ.get("SOP_SHARED_CONFIG") or DEFAULT_CONFIG_PATH)
+        PROJECT_ROOT, os.environ.get("SOP_SHARED_CONFIG") or DEFAULT_CONFIG_PATH)
     label = CONFIG_RELATIVE_PATH.as_posix() if path == DEFAULT_CONFIG_PATH else str(path)
     try:
         source = path.read_bytes()
@@ -231,7 +231,7 @@ def _sum_known(values):
 
 def project_generation_sources(data, mode, rules, known_summaries=()):
     """Build a read-only summary view from single-generation identities only."""
-    from sop_plan_scope import is_model_plan
+    from .plan_scope import is_model_plan
     if not isinstance(mode, str) or mode not in MODES:
         raise MergeRuleError("代际视图只能选择单代际或汇总代际。")
     # History only remembers known summary identities, never old memberships.

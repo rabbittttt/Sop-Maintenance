@@ -7,8 +7,8 @@ from uuid import uuid4
 
 import openpyxl
 
-from sop_store import SOPStore, TZ
-from sop_workbook import WorkbookSync
+from sop.store import SOPStore, TZ
+from sop.workbook import WorkbookSync
 
 
 def main():

@@ -7,7 +7,7 @@ import openpyxl
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from sop_paths import source_directory
+from sop.paths import source_directory
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")

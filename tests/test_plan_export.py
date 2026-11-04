@@ -12,8 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from server import make_handler
-from sop_export import ExportError, MAX_REQUEST_BYTES, MAX_SAFE_INTEGER, PlanExport, validate_export
-from sop_store import ValidationError
+from sop.export import ExportError, MAX_REQUEST_BYTES, MAX_SAFE_INTEGER, PlanExport, validate_export
+from sop.store import ValidationError
 
 NO_BODY = object()
 
@@ -153,7 +153,7 @@ class ExportGenerationTest(unittest.TestCase):
         service = PlanExport(root=self.root, timeout=91)
         body = {**payload(), "output_path": str(self.root / "export.xlsx")}
         result = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "output_path": body["output_path"]}), "")
-        with patch("sop_export.Path.is_file", return_value=True), patch("sop_export.subprocess.run", return_value=result) as run:
+        with patch("sop.export.Path.is_file", return_value=True), patch("sop.export.subprocess.run", return_value=result) as run:
             service._node_writer(body)
             kwargs = run.call_args.kwargs
             self.assertEqual(kwargs["timeout"], 91)

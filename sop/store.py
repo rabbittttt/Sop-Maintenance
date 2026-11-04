@@ -11,9 +11,9 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
-from sop_brand import brand_order_key
-from sop_plan_scope import MODEL_PLAN_LABEL, is_model_plan, effective_products, plan_total
-from sop_source_rules import (MergeRuleError, load_merge_rules, summary_names, project_generation_sources,
+from .brand import brand_order_key
+from .plan_scope import MODEL_PLAN_LABEL, is_model_plan, effective_products, plan_total
+from .source_rules import (MergeRuleError, load_merge_rules, summary_names, project_generation_sources,
                               normalize_generation, product_display_model, catalog_model_input,
                               _generations as source_generations)
 
@@ -842,7 +842,7 @@ class SOPStore:
         return self._save(body, "plan")
 
     def save_grid_batch(self, body):
-        from sop_grid import save_grid_batch
+        from .grid import save_grid_batch
         return save_grid_batch(self, body)
 
     def _validate_model_plan_catalog(self):

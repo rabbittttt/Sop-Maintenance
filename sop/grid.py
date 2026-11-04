@@ -4,10 +4,10 @@ import json
 import re
 import uuid
 
-from sop_plan_scope import MODEL_PLAN_LABEL, is_model_plan
+from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
 
-from sop_source_rules import generation_display_model, normalize_generation, project_generation_sources
-from sop_store import (ConflictError, TZ, ValidationError, catalog_name_key, display_version,
+from .source_rules import generation_display_model, normalize_generation, project_generation_sources
+from .store import (ConflictError, TZ, ValidationError, catalog_name_key, display_version,
                        horizon, product_display_model, quantity, stamp, text_field, validate_month)
 
 

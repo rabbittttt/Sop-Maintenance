@@ -20,7 +20,9 @@ MANIFEST_NAME = "sop-release.json"
 ROOT = Path(__file__).resolve().parents[1]
 WEB_EXTENSIONS = {".html", ".css", ".js", ".mjs", ".json", ".svg", ".png", ".ico",
                   ".jpg", ".jpeg", ".webp", ".gif", ".woff", ".woff2"}
-REQUIRED_FILES = {"server.py", "sop_gateway.py", "requirements.txt", "requirements-intranet.txt", "web/index.html", "integration/iis/SopIdentityBridge.cs"}
+REQUIRED_FILES = {"server.py", "sop/__init__.py", "sop/gateway.py", "sop/paths.py", "sop/store.py",
+                  "requirements.txt", "requirements-intranet.txt", "web/index.html",
+                  "integration/iis/SopIdentityBridge.cs"}
 
 
 def reject_reparse(path: Path) -> None:
@@ -49,6 +51,7 @@ def allowed_release_path(relative: str) -> bool:
     if len(parts) == 1:
         return path.suffix == ".py" or relative in {"requirements.txt", "requirements-intranet.txt", "README.md", "PORTAL-INTEGRATION.md"}
     return ((parts[0] == "web" and path.suffix.lower() in WEB_EXTENSIONS) or
+            (len(parts) == 2 and parts[0] == "sop" and path.suffix == ".py") or
             (len(parts) == 2 and parts[0] == "scripts" and path.suffix == ".mjs") or
             (len(parts) == 3 and parts[:2] == ["integration", "iis"] and path.suffix == ".cs"))
 
@@ -56,6 +59,15 @@ def allowed_release_path(relative: str) -> bool:
 def source_files(source: Path) -> list[Path]:
     reject_reparse(source)
     files = [path for path in source.iterdir() if path.is_file() and allowed_release_path(path.name)]
+    package = source / "sop"
+    if package.is_dir():
+        reject_reparse(package)
+        # The runtime package is flat. Do not include local state, caches or
+        # configuration merely because they happen to be stored beside code.
+        for path in package.iterdir():
+            reject_reparse(path)
+            if path.is_file() and allowed_release_path(path.relative_to(source).as_posix()):
+                files.append(path)
     web = source / "web"
     if not web.is_dir():
         raise ValueError("SOP web directory is missing")

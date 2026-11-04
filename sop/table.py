@@ -5,8 +5,8 @@ import math
 import re
 import xml.etree.ElementTree as ET
 
-from sop_store import ValidationError, catalog_name_key, display_version, text_field
-from sop_plan_scope import MODEL_PLAN_LABEL, is_model_plan
+from .store import ValidationError, catalog_name_key, display_version, text_field
+from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
 
 
 def _quantity(value):

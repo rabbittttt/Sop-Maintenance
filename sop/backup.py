@@ -12,16 +12,17 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
 
-from sop_runtime import (ArtifactDependencyError, ensure_artifact_tool,
+from .paths import PROJECT_ROOT
+from .runtime import (ArtifactDependencyError, ensure_artifact_tool,
                          missing_artifact_module, node_executable, python_excel_requested)
-from sop_store import ValidationError, stamp
+from .store import ValidationError, stamp
 
 
 class SnapshotBackup:
     def __init__(self, store, directory=None, writer=None, root=None):
         self.store = store
         self.directory = Path(directory or store.db_path.parent / "backups/sop_excel").resolve()
-        self.root = Path(root or Path(__file__).resolve().parent).resolve()
+        self.root = Path(root or PROJECT_ROOT).resolve()
         self.writer = writer or self._node_writer
         self.condition = threading.Condition(threading.RLock())
         self.inflight = set()
@@ -31,7 +32,7 @@ class SnapshotBackup:
 
     def _python_writer(self, payload):
         try:
-            from sop_xlsx_backup import write_snapshot_workbook
+            from .xlsx_backup import write_snapshot_workbook
             write_snapshot_workbook(payload)
         except ModuleNotFoundError as error:
             if error.name != "openpyxl":

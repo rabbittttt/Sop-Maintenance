@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from sop_store import SOPStore, TZ
-from sop_workbook import WorkbookSync, _signature
+from sop.store import SOPStore, TZ
+from sop.workbook import WorkbookSync, _signature
 from tests.test_workbook_sync import edit_cell
 
 
@@ -27,7 +27,7 @@ class PresentationRevisionTest(unittest.TestCase):
                              lambda: datetime(2026, 10, 27, 12, tzinfo=TZ))
             try:
                 path = root / "SOP计划维护.xlsx"
-                with patch("sop_workbook.PRESENTATION_VERSION", 0):
+                with patch("sop.workbook.PRESENTATION_VERSION", 0):
                     previous = WorkbookSync(store, path)
                     self.assertEqual(previous.sync()["status"], "synced")
                     old_token, expected, *_ = previous._parse(path.read_bytes())

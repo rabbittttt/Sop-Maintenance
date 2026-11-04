@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import openpyxl
-from sop_data import VERSION_METRICS, extract
+from sop.data import VERSION_METRICS, extract
 
 
 class SummarySourceTest(unittest.TestCase):

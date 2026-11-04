@@ -14,8 +14,8 @@ import unittest
 from unittest.mock import patch
 
 from server import make_handler
-from sop_gateway import GatewayConfig, GatewayError, canonical_origin
-from sop_store import ValidationError
+from sop.gateway import GatewayConfig, GatewayError, canonical_origin
+from sop.store import ValidationError
 
 
 KEY = "x" * 48

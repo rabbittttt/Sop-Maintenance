@@ -11,8 +11,8 @@ import threading
 import time
 import uuid
 
-from sop_paths import sales_source_files, source_directory, runtime_data_directory
-from sop_store import ValidationError
+from .paths import PROJECT_ROOT, sales_source_files, source_directory, runtime_data_directory
+from .store import ValidationError
 
 LOGGER = logging.getLogger("sop")
 
@@ -20,8 +20,8 @@ LOGGER = logging.getLogger("sop")
 class SalesRefresh:
     def __init__(self, store, workbook_sync=None, *, root=None, reader=None, interval=60, clock=time.monotonic):
         self.store, self.workbook_sync = store, workbook_sync
-        self.root = Path(root or Path(__file__).resolve().parent)
-        self.reader = reader or (lambda **kwargs: importlib.import_module("sop_data").refresh(**kwargs))
+        self.root = Path(root or PROJECT_ROOT)
+        self.reader = reader or (lambda **kwargs: importlib.import_module("sop.data").refresh(**kwargs))
         self.interval, self.clock = interval, clock
         self.lock = threading.RLock()
         self.observed = self.applied = None

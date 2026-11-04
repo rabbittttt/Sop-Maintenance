@@ -6,8 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from sop_source_rules import MergeRuleError, project_generation_sources
-from sop_store import SOPStore, TZ
+from sop.source_rules import MergeRuleError, project_generation_sources
+from sop.store import SOPStore, TZ
 
 
 class GenerationYearAliasTest(unittest.TestCase):
@@ -60,7 +60,7 @@ class GenerationYearAliasTest(unittest.TestCase):
             product = {"id": "beta", "brand": "尊界", "model": "V800 BETA", "version": "Max",
                        "generation": "尊界 V800 BETA 2026款"}
             source.write_text(json.dumps({"meta": {}, "products": [product], "sales": []}), encoding="utf-8")
-            with patch("sop_source_rules.DEFAULT_CONFIG_PATH", config):
+            with patch("sop.source_rules.DEFAULT_CONFIG_PATH", config):
                 store = SOPStore(root / "test.sqlite3", source, lambda: datetime(2026, 10, 28, 12, tzinfo=TZ))
                 try:
                     for model, version in [("V800 BETA", "Ultra"), ("V800 2026款", "Premium")]:

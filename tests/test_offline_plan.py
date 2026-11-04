@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from sop_store import SOPStore, TZ, ValidationError
-from sop_workbook import WorkbookSync
+from sop.store import SOPStore, TZ, ValidationError
+from sop.workbook import WorkbookSync
 from tests.test_inline_workbook import change_rows
 from tests.test_workbook_sync import edit_cell
 
@@ -41,7 +41,7 @@ class OfflinePlanWorkbookTest(unittest.TestCase):
         return self.sync._parse(self.path.read_bytes())[1]["layout"]["sheets"][0]
 
     def test_maintenance_without_editable_cells_omits_empty_validation_xml(self):
-        from sop_xlsx_plan import write_plan_workbook
+        from sop.xlsx_plan import write_plan_workbook
         from tests.test_inline_renderer import input_payload
 
         payload = input_payload()

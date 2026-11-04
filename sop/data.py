@@ -20,10 +20,10 @@ import sys
 
 import openpyxl
 
-from sop_paths import sales_source_files, source_directory, runtime_data_directory
+from .paths import PROJECT_ROOT, sales_source_files, source_directory, runtime_data_directory
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = PROJECT_ROOT
 SHANGHAI = timezone(timedelta(hours=8))
 SOURCE_NAME = "鸿蒙智行销量数据汇总.xlsx"
 DAILY_SHEET = "小订首销平销by天"

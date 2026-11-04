@@ -12,8 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from sop_store import SOPStore, TZ
-from sop_workbook import WorkbookSync, _column
+from sop.store import SOPStore, TZ
+from sop.workbook import WorkbookSync, _column
 from tests.test_workbook_sync import fixture_writer, edit_cell
 
 NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -192,7 +192,7 @@ class InlineWorkbookTest(unittest.TestCase):
 
     def test_excel_open_sequential_renames_can_restore_original_name(self):
         address = f"C{self.row('a')}"
-        with patch("sop_workbook.os.replace", side_effect=PermissionError("open in Excel")):
+        with patch("sop.workbook.os.replace", side_effect=PermissionError("open in Excel")):
             edit_cell(self.path, address, "第一次")
             self.assertEqual(self.sync.sync()["status"], "pending")
             edit_cell(self.path, address, "第二次")
@@ -215,7 +215,7 @@ class InlineWorkbookTest(unittest.TestCase):
 
     def test_open_workbook_rename_then_delete_keeps_accepted_name(self):
         row = self.row("a")
-        with patch("sop_workbook.os.replace", side_effect=PermissionError("open in Excel")):
+        with patch("sop.workbook.os.replace", side_effect=PermissionError("open in Excel")):
             edit_cell(self.path, f"C{row}", "已经改好的名称")
             self.assertEqual(self.sync.sync()["status"], "pending")
             change_rows(self.path, row, delete=True)
@@ -248,7 +248,7 @@ class InlineWorkbookTest(unittest.TestCase):
     def test_late_writeback_lock_cannot_create_duplicate_after_new_row_rename(self):
         row = self.row("b")
         change_rows(self.path, row, insert={"A": "问界", "B": "M7", "C": "已登记新版本"})
-        with patch("sop_workbook.os.replace", side_effect=PermissionError("opened after preflight")):
+        with patch("sop.workbook.os.replace", side_effect=PermissionError("opened after preflight")):
             self.assertEqual(self.sync.sync()["status"], "pending")
         edit_cell(self.path, f"C{row}", "再次更名")
         state = self.sync.sync()

@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sop_store import ConflictError, SOPStore, TZ, ValidationError
+from sop.store import ConflictError, SOPStore, TZ, ValidationError
 
 
 class ProductCatalogTest(unittest.TestCase):

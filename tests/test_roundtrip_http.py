@@ -13,12 +13,12 @@ from pathlib import Path
 import openpyxl
 
 from server import make_handler
-from sop_export import PlanExport
-from sop_roundtrip import PlanRoundtrip
-from sop_store import ConflictError, SOPStore, TZ
-from sop_workbook import WorkbookSync
-from sop_xlsx_export import write_export_workbook
-from sop_xlsx_plan import write_plan_workbook
+from sop.export import PlanExport
+from sop.roundtrip import PlanRoundtrip
+from sop.store import ConflictError, SOPStore, TZ
+from sop.workbook import WorkbookSync
+from sop.xlsx_export import write_export_workbook
+from sop.xlsx_plan import write_plan_workbook
 from tests.test_plan_export import NoBusinessAccess, fixture_writer, payload
 from tests.test_roundtrip import export_body
 from tests.test_workbook_sync import edit_cell

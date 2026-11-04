@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import sop_data
+from sop import data as sop_data
 
 
 def fixture():

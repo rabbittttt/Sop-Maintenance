@@ -9,8 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from server import make_handler
-from sop_backup import SnapshotBackup
-from sop_store import SOPStore, TZ
+from sop.backup import SnapshotBackup
+from sop.store import SOPStore, TZ
 
 
 def fixture_writer(payload):

@@ -12,8 +12,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from server import make_handler
-from sop_store import ConflictError, SOPStore, TZ, ValidationError
-from sop_workbook import WorkbookSync
+from sop.store import ConflictError, SOPStore, TZ, ValidationError
+from sop.workbook import WorkbookSync
 from tests.test_catalog_api import SheetSync
 
 
@@ -24,7 +24,7 @@ class GridBatchTest(unittest.TestCase):
         self.root = Path(temporary.name)
         self.config = self.root / "shared_config.py"
         self.config.write_text("MERGE_GROUPS = {'智界 Together 2026款汇总': ['智界 A 2026款', '智界 B 2026款']}\n", encoding="utf-8")
-        rule_patch = patch("sop_source_rules.DEFAULT_CONFIG_PATH", self.config)
+        rule_patch = patch("sop.source_rules.DEFAULT_CONFIG_PATH", self.config)
         rule_patch.start()
         self.addCleanup(rule_patch.stop)
         source = self.root / "sales.json"

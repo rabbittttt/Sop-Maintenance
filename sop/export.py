@@ -14,9 +14,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from sop_runtime import (ArtifactDependencyError, ensure_artifact_tool,
+from .paths import PROJECT_ROOT
+from .runtime import (ArtifactDependencyError, ensure_artifact_tool,
                          missing_artifact_module, node_executable, python_excel_requested)
-from sop_store import ValidationError, validate_month
+from .store import ValidationError, validate_month
 
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_WORKBOOK_BYTES = 32 * 1024 * 1024
@@ -107,7 +108,7 @@ def validate_export(body):
 
 class PlanExport:
     def __init__(self, root=None, writer=None, temp_root=None, timeout=120):
-        self.root = Path(root or Path(__file__).resolve().parent).resolve()
+        self.root = Path(root or PROJECT_ROOT).resolve()
         self.writer = writer or self._node_writer
         self.temp_root = Path(temp_root) if temp_root is not None else None
         self.timeout = timeout
@@ -115,7 +116,7 @@ class PlanExport:
 
     def _python_writer(self, payload):
         try:
-            from sop_xlsx_export import write_export_workbook
+            from .xlsx_export import write_export_workbook
             write_export_workbook(payload)
         except ModuleNotFoundError as error:
             if error.name != "openpyxl":

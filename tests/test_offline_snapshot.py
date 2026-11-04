@@ -8,8 +8,8 @@ from pathlib import Path
 
 import openpyxl
 
-from sop_runtime import node_executable
-from sop_xlsx_backup import write_snapshot_workbook
+from sop.runtime import node_executable
+from sop.xlsx_backup import write_snapshot_workbook
 
 
 ROOT = Path(__file__).resolve().parents[1]

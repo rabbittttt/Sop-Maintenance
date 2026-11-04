@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import sop_backup
-import sop_export
-import sop_workbook
-from sop_runtime import ArtifactDependencyError
+from sop import backup as sop_backup
+from sop import export as sop_export
+from sop import workbook as sop_workbook
+from sop.runtime import ArtifactDependencyError
 
 
 class ExcelDispatchTest(unittest.TestCase):
