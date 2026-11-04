@@ -94,6 +94,8 @@ class ExcelDispatchTest(unittest.TestCase):
                      patch.object(module.subprocess, "run", return_value=success) as run:
                     instance._node_writer(self.payload)
                     self.assertEqual(run.call_args.kwargs["env"]["SOP_PYTHON_PATH"], sys.executable)
+                    self.assertEqual(Path(run.call_args.kwargs["env"]["PATH"].split(os.pathsep)[0]), Path(sys.executable).parent)
+                    self.assertEqual(run.call_args.kwargs["env"].get("VIRTUAL_ENV"), sys.prefix if sys.prefix != sys.base_prefix else None)
                     self.assertEqual(os.environ["SOP_PYTHON_PATH"], "missing/old-python.exe")
 
 

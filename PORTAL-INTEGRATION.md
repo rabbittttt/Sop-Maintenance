@@ -4,7 +4,7 @@
 
 ## 独立运行
 
-原有 `启动工作台.cmd`、`start-sop.ps1` 和 `python server.py --port 8876` 继续用于本机独立运行。不传 `--gateway-config` 时仍使用本机 Host/Origin 校验、原有业务目录和维护人流程。
+原有 `启动工作台.cmd`、`start-sop.ps1` 和 `../.venv/Scripts/python.exe server.py --port 8876` 继续用于本机独立运行。启动器默认沿自身位置查找 `Project/.venv`，不依赖 Project 的上级路径。不传 `--gateway-config` 时仍使用本机 Host/Origin 校验、原有业务目录和维护人流程。
 
 ## 门户模式
 
@@ -18,7 +18,7 @@
 
 ## 发布产物
 
-运行 `python scripts/build_release.py --destination <全新绝对目录>` 构建发布目录。`sop-release.json` 记录源码提交、工作区状态和每个发布文件的 SHA256。发布内容不包含业务数据库、Excel、真实共享规则、机密、Git 元数据或测试输出。
+运行 `../.venv/Scripts/python.exe scripts/build_release.py --destination <全新绝对目录>` 构建发布目录（非 Windows 使用 `../.venv/bin/python`）。`sop-release.json` 记录源码提交、工作区状态和每个发布文件的 SHA256。发布内容不包含业务数据库、Excel、真实共享规则、机密、Git 元数据或测试输出。
 
 门户打包只接受通过 manifest 校验的 SOP 发布目录，部署包中的 `services/sop` 是只读发布产物布局，不是需要在门户维护的第二份源码。更新 SOP 应修改本仓库、验证并重新构建产物。
 

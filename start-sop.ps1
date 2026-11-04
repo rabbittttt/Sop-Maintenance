@@ -12,22 +12,12 @@ if ($sopRuntime) {
         throw "SOP_PYTHON_PATH 指向的 Python 不存在：$sopRuntime"
     }
 } else {
-    foreach ($sopEnvironmentRoot in @($sopRoot, (Split-Path -Parent $sopRoot))) {
-        $sopEnvironment = Join-Path $sopEnvironmentRoot '.venv'
-        if (Test-Path -LiteralPath $sopEnvironment) {
-            $sopCandidate = Join-Path $sopEnvironment 'Scripts\python.exe'
-            if (-not (Test-Path -LiteralPath $sopCandidate -PathType Leaf)) { throw "Python 环境不完整：$sopEnvironment。请保留旧环境并在本机重新初始化。" }
-            $sopRuntime = $sopCandidate
-            break
-        }
-    }
-    if (-not $sopRuntime) {
-        foreach ($sopCommandName in @('python', 'python3')) {
-            $sopPython = Get-Command $sopCommandName -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($sopPython) { $sopRuntime = $sopPython.Source; break }
-        }
-    }
-    if (-not $sopRuntime) { throw '找不到 Python。请创建项目或工作区的 .venv，或设置 SOP_PYTHON_PATH，并安装 requirements.txt。' }
+    $sopWorkspace = Get-Item -LiteralPath $sopRoot
+    while ($sopWorkspace -and $sopWorkspace.Name -ine 'Project') { $sopWorkspace = $sopWorkspace.Parent }
+    if (-not $sopWorkspace) { throw '找不到 Project 工作区。请将项目放在 Project 目录下，并初始化 Project/.venv。' }
+    $sopPythonSuffix = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { '.venv\Scripts\python.exe' } else { '.venv/bin/python' }
+    $sopRuntime = Join-Path $sopWorkspace.FullName $sopPythonSuffix
+    if (-not (Test-Path -LiteralPath $sopRuntime -PathType Leaf)) { throw "Project 共享 Python 不存在：$sopRuntime。请运行工作区或 SOP 的初始化环境入口。" }
 }
 $sopProbe = "import json,sys; sys.version_info >= (3,10) or sys.exit('Python 3.10+ is required'); import openpyxl; print(json.dumps({'executable':sys.executable},ensure_ascii=True))"
 try {
@@ -40,6 +30,14 @@ try {
 }
 if ($CheckRuntime) { Write-Output $sopRuntime; exit 0 }
 $env:SOP_PYTHON_PATH = $sopRuntime
+$sopPythonDirectory = Split-Path -Parent $sopRuntime
+$env:PATH = $sopPythonDirectory + [IO.Path]::PathSeparator + $env:PATH
+$sopSelectedEnvironment = Split-Path -Parent $sopPythonDirectory
+if (Test-Path -LiteralPath (Join-Path $sopSelectedEnvironment 'pyvenv.cfg') -PathType Leaf) {
+    $env:VIRTUAL_ENV = $sopSelectedEnvironment
+} else {
+    Remove-Item Env:VIRTUAL_ENV -ErrorAction SilentlyContinue
+}
 $Host.UI.RawUI.WindowTitle = 'SOP计划工作台'
 $sopServer = Join-Path $sopRoot 'server.py'
 Write-Host "使用 Python：$sopRuntime"

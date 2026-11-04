@@ -14,7 +14,13 @@ _ARTIFACT_LINK_LOCK = threading.Lock()
 
 def node_environment():
     """Excel finalizers must use the same Python as their calling service."""
-    return {**os.environ, "SOP_PYTHON_PATH": sys.executable}
+    environment = {**os.environ, "SOP_PYTHON_PATH": sys.executable}
+    environment["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
+    if sys.prefix != sys.base_prefix:
+        environment["VIRTUAL_ENV"] = sys.prefix
+    else:
+        environment.pop("VIRTUAL_ENV", None)
+    return environment
 
 
 def node_executable():

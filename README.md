@@ -4,16 +4,16 @@
 
 ## 启动
 
-1. 安装 Python 3.10+，运行 `python -m pip install -r requirements.txt`。
+1. 安装工作区要求的 Python（共享环境至少 3.11；SOP 业务代码自身最低 3.10），将项目放在 `Project/` 下，运行工作区的 `初始化共享环境.cmd`；也可运行本项目的 `初始化环境.cmd`，仅向共享环境安装 SOP 依赖。
 2. 同级存在 `../共享数据/` 时，从 `../共享数据/订单汇总/` 读取订单分析生成的销量文件；独立使用且没有共享目录时仍读取 `input_file/`。点击“网页维护”即可在主表改车型总量、展开改版本，或增删行，再点击“保存修改”；无需选择维护月份或维护粒度。Excel保留导入、导出能力，`../共享数据/SOP计划/SOP计划维护.xlsx` 是可选的同步文件（没有共享根时使用 `input_file/`）；没有它时，启动、网页维护和导出都不会自动创建。需要长期表格同步时，到“数据与规则”创建维护Excel。
 3. 双击 `启动工作台.cmd`，服务就绪后自动打开 <http://127.0.0.1:8876/>，启动窗口保持运行。
 4. 关闭该命令窗口或按 `Ctrl+C` 即停止工作台，无需独立停止脚本。仅关闭浏览器页面不会停止服务。
 
-重复双击会打开已运行的网页，服务仍由第一次启动的窗口控制。旧版隐藏后台进程会在新入口首次启动时核对工作目录、进程身份及端口后切换；其他服务不受影响。命令行也可运行 `python server.py --open-browser`；`./start-sop.ps1 -NoBrowser` 适合不自动打开网页的前台运行。
+重复双击会打开已运行的网页，服务仍由第一次启动的窗口控制。旧版隐藏后台进程会在新入口首次启动时核对工作目录、进程身份及端口后切换；其他服务不受影响。命令行也可运行 `../.venv/Scripts/python.exe server.py --open-browser`；`./start-sop.ps1 -NoBrowser` 适合不自动打开网页的前台运行。
 
-启动脚本依次使用 `SOP_PYTHON_PATH`、本项目 `.venv`、同级工作区 `../.venv`、PATH 中的 Python；不再自动选择 Codex 缓存的 Python。`SOP_PYTHON_PATH` 的相对路径按 SOP 项目根目录解析，例如 `../.venv/Scripts/python.exe`。启动前检查 Python 3.10+ 和 `openpyxl`；选定的环境缺少依赖时会明确报错，请使用该解释器安装 `requirements.txt`。运行 `./start-sop.ps1 -CheckRuntime` 可只检查并显示解释器，不启动服务或修改业务数据。
+启动脚本默认从自身位置向上定位名为 `Project` 的工作区，只使用其 `.venv`（Windows 为 `.venv/Scripts/python.exe`，其他系统为 `.venv/bin/python`）。Project 的上级目录可以任意改变；嵌套项目也使用同一个共享环境，不再优先项目自己的 `.venv`，也不会改用 PATH 或 Codex 缓存的 Python。显式 `SOP_PYTHON_PATH` 仍可覆盖；相对值按 SOP 项目根目录解析，例如 `../.venv/Scripts/python.exe`。启动前检查 Python 3.10+ 和 `openpyxl`；共享环境缺失或损坏时明确报错。运行 `./start-sop.ps1 -CheckRuntime` 可只检查并显示解释器，不启动服务或修改业务数据。
 
-换电脑时先安装 Python 3.10+，双击 `初始化环境.cmd`（或运行 `./setup-environment.ps1`），在本项目创建 `.venv` 并按 `requirements.txt` 安装依赖，再双击启动入口。已有环境也会重新校验和安装所需依赖；不会修改系统 Python 的包。`.venv` 含有本机路径，不能从旧电脑直接复制使用；复制项目时排除它，在新电脑重建。初始化需要访问配置的 Python 包源；离线电脑可预先准备对应平台和 Python 版本的依赖包。
+换电脑时先安装符合工作区依赖要求的 Python 3.11+，保持项目位于 `Project` 内，运行 Project 根的 `初始化共享环境.cmd` 重建共享 `.venv`。本项目的 `初始化环境.cmd`（或 `./setup-environment.ps1`）同样以 `Project/.venv` 为目标，但只按本项目 `requirements.txt` 安装 SOP 依赖，不另建项目环境。已有共享环境会重新校验和安装所需依赖；不会修改系统 Python 的包。`.venv` 含有本机路径，不能从旧电脑直接复制使用；复制 Project 时排除它，在新电脑重建。初始化需要访问配置的 Python 包源；离线电脑可预先准备对应平台和 Python 版本的依赖包。
 
 服务调用的 Excel 生成脚本会继承当前服务的 Python，避免再启动另一份解释器；独立执行生成脚本时采用相同的环境选择顺序。Node 仍可由 `SOP_NODE_PATH` 指定，并保留可选的本机 Excel 生成环境和 PATH 查找。
 
@@ -47,12 +47,12 @@
 
 业务模块集中在 `sop/` 包，根目录只保留 `server.py` 作为 Python 启动入口；运行数据与临时文件通过 `.gitignore` 排除。换电脑时，复制 `data/`、`input_file/` 及所使用的共享输入和计划目录，才能保留当前业务状态。不要仅依靠 Git 仓库保存计划或历史快照。
 
-需要手动刷新销量缓存时，在项目根目录运行 `python -m sop.data`；只读检查原始 Excel 可运行 `python scripts/inspect_sales.py`。
+需要手动刷新销量缓存时，在项目根目录运行 `../.venv/Scripts/python.exe -m sop.data`；只读检查原始 Excel 可运行 `../.venv/Scripts/python.exe scripts/inspect_sales.py`。非 Windows 使用对应的 `../.venv/bin/python`。
 
 ## 验证
 
 ```powershell
-python -m unittest discover -s tests -v
+../.venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
 本机已安装 Microsoft Excel 时，可用原生只读打开检查生成文件。此检查使用正常打开方式，遇到需要修复的文件会失败，并核对标题合并、列宽及隐藏列：
