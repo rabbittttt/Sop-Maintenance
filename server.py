@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from sop_paths import plan_workbook_path
+from sop_paths import plan_workbook_path, runtime_data_directory
 from sop_store import ConflictError, SOPStore, ValidationError
 from sop_workbook import WorkbookSync
 from sop_backup import SnapshotBackup
@@ -456,16 +456,16 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
     return Handler
 
 
-def main():
+def runtime_options(argv=None):
     parser = argparse.ArgumentParser(description="SOP计划工作台：保持窗口运行，关闭窗口即停止")
     parser.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
     parser.add_argument("--port", type=int, default=8876)
-    parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
+    parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--web-dir", type=Path, default=ROOT / "web")
     parser.add_argument("--plan-file", type=Path)
     parser.add_argument("--open-browser", action="store_true", help="就绪后自动打开工作台网页")
     parser.add_argument("--gateway-config", type=Path, help="IIS代理配置，显式启用子路径和可信身份模式")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error("端口必须为 1 至 65535。")
     gateway = None
@@ -485,6 +485,14 @@ def main():
             parser.error("代理服务不支持 --open-browser，请通过 IIS 入口访问。")
     if args.plan_file is None:
         args.plan_file = plan_workbook_path(ROOT)
+    if args.data_dir is None:
+        args.data_dir = runtime_data_directory(ROOT)
+    os.environ["SOP_DATA_DIR"] = str(args.data_dir.resolve())
+    return args, gateway
+
+
+def main():
+    args, gateway = runtime_options()
     url = f"http://{args.host}:{args.port}"
     # Bind before touching persistent data, so a busy port cannot start a second writer.
     try:

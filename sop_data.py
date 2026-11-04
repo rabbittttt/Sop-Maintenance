@@ -665,7 +665,7 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="只读导入销量 Excel，为 SOP 看板刷新月度实际量")
     parser.add_argument("--source-dir", type=Path, default=source_directory(ROOT))
-    parser.add_argument("--output", type=Path, default=ROOT / "data" / "sales.json")
+    parser.add_argument("--output", type=Path, default=runtime_data_directory(ROOT) / "sales.json")
     parser.add_argument("--as-of", help="排除该日及未来数据，YYYY-MM-DD；默认北京时间今天")
     parser.add_argument("--version-lock-basis", choices=sorted(LOCK_BASIS_OPTIONS), help="model_lock_row仅采用交车锁单行；source_version_quantity仅适用于已明确确认版本数量为锁单的来源")
     args = parser.parse_args()

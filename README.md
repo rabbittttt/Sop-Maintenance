@@ -17,9 +17,11 @@
 
 **共享代际规则：** 将“SOP看板”和“订单分析”放在同级目录，保留 `../订单分析/scripts/config/shared_config.py` 的 `MERGE_GROUPS` 字典。看板每次读取此相对路径，不硬编码车型映射；规则修改后刷新即生效。页面可切换单代际与汇总代际，汇总计划自动相加、只读，未参与汇总的车型仍可维护。规则缺失或无效时会明确报错，不能同时展示两层数量。该外部配置由“订单分析”项目维护，不复制进本仓库。
 
-**输入路径：** `--source-dir`（数据导入命令）或网关 `source_dir` 显式配置优先；默认读取顺序为 `SOP_SOURCE_DIR`、`SHARED_DATA_ROOT/订单汇总`、同级 `../共享数据/订单汇总`，最后仅在同级共享根不存在时兼容 `input_file/`。`SOP_SOURCE_DIR` 和 `SHARED_DATA_ROOT` 环境变量请填写绝对路径。显式指定的共享根或已存在的共享根缺少订单文件时会报告缺失，不改读旧副本。订单汇总目录只提供只读输入；计划维护表默认位于共享根的 `SOP计划/SOP计划维护.xlsx`，数据库和规则仍由原项目维护。其他汇总报表不会加入 SOP 销量计算。
+**输入路径：** `--source-dir`（数据导入命令）或网关 `source_dir` 显式配置优先；默认读取顺序为 `SOP_SOURCE_DIR`、`SHARED_DATA_ROOT/订单汇总`、同级 `../共享数据/订单汇总`，最后仅在同级共享根不存在时兼容 `input_file/`。`SOP_SOURCE_DIR` 和 `SHARED_DATA_ROOT` 支持相对 SOP 项目根目录的路径，例如 `SHARED_DATA_ROOT=../共享数据`；也兼容绝对路径，不随启动时的当前目录改变。显式指定的共享根或已存在的共享根缺少订单文件时会报告缺失，不改读旧副本。订单汇总目录只提供只读输入；计划维护表默认位于共享根的 `SOP计划/SOP计划维护.xlsx`，数据库和规则仍由原项目维护。其他汇总报表不会加入 SOP 销量计算。
 
-**计划表路径：** 网关 `plan_file` 或命令行 `--plan-file` 显式路径沿用既有优先级，其次为 `SOP_PLAN_DIR/SOP计划维护.xlsx`、`SHARED_DATA_ROOT/SOP计划/SOP计划维护.xlsx`、同级 `../共享数据/SOP计划/SOP计划维护.xlsx`；没有共享根时兼容 `input_file/SOP计划维护.xlsx`。`SOP_PLAN_DIR` 请填写绝对路径。创建与同步维护表写入所选计划目录，销售源目录不参与此选择。门户预览仍将计划表复制到隔离目录，并通过网关 `plan_file` 绑定该副本。
+**计划表路径：** 网关 `plan_file` 或命令行 `--plan-file` 显式路径沿用既有优先级，其次为 `SOP_PLAN_DIR/SOP计划维护.xlsx`、`SHARED_DATA_ROOT/SOP计划/SOP计划维护.xlsx`、同级 `../共享数据/SOP计划/SOP计划维护.xlsx`；没有共享根时兼容 `input_file/SOP计划维护.xlsx`。`SOP_PLAN_DIR` 支持相对 SOP 项目根目录的路径，例如 `../共享数据/SOP计划`。创建与同步维护表写入所选计划目录，销售源目录不参与此选择。门户预览仍将计划表复制到隔离目录，并通过网关 `plan_file` 绑定该副本。
+
+**数据与规则路径：** `SOP_DATA_DIR`（默认 `./data`）和 `SOP_SHARED_CONFIG`（例如 `../订单分析/scripts/config/shared_config.py`）的相对值也按 SOP 项目根目录解析。服务默认数据库目录及数据导入命令默认输出遵循 `SOP_DATA_DIR`；显式 `--data-dir` / `--output` 优先，网关 `data_dir` / `plan_file` 继续保持既有最高优先级和绝对路径校验。运行时会解析为绝对路径；不需要在本地配置中写死盘符。
 
 ## 目录
 

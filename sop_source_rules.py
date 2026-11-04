@@ -6,6 +6,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from pathlib import Path
+from sop_paths import project_path
 
 CONFIG_RELATIVE_PATH = Path("..") / "订单分析" / "scripts" / "config" / "shared_config.py"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / CONFIG_RELATIVE_PATH
@@ -113,7 +114,8 @@ def _display_labels(data):
 
 def load_merge_rules(path=None):
     """Read only the literal MERGE_GROUPS assignment; never execute the file."""
-    path = Path(path) if path is not None else Path(os.environ.get("SOP_SHARED_CONFIG") or DEFAULT_CONFIG_PATH)
+    path = Path(path) if path is not None else project_path(
+        Path(__file__).resolve().parent, os.environ.get("SOP_SHARED_CONFIG") or DEFAULT_CONFIG_PATH)
     label = CONFIG_RELATIVE_PATH.as_posix() if path == DEFAULT_CONFIG_PATH else str(path)
     try:
         source = path.read_bytes()
