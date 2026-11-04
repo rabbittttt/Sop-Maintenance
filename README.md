@@ -11,7 +11,13 @@
 
 重复双击会打开已运行的网页，服务仍由第一次启动的窗口控制。旧版隐藏后台进程会在新入口首次启动时核对工作目录、进程身份及端口后切换；其他服务不受影响。命令行也可运行 `python server.py --open-browser`；`./start-sop.ps1 -NoBrowser` 适合不自动打开网页的前台运行。
 
-启动脚本优先使用 `SOP_PYTHON_PATH` 指定的 Python，其次使用本机 Codex 运行环境，最后使用 PATH 中的 Python。Excel 生成脚本优先使用 `SOP_NODE_PATH` 指定的 Node，其次使用本机 Codex 运行环境，最后使用 PATH 中的 Node。
+启动脚本依次使用 `SOP_PYTHON_PATH`、本项目 `.venv`、同级工作区 `../.venv`、PATH 中的 Python；不再自动选择 Codex 缓存的 Python。`SOP_PYTHON_PATH` 的相对路径按 SOP 项目根目录解析，例如 `../.venv/Scripts/python.exe`。启动前检查 Python 3.10+ 和 `openpyxl`；选定的环境缺少依赖时会明确报错，请使用该解释器安装 `requirements.txt`。运行 `./start-sop.ps1 -CheckRuntime` 可只检查并显示解释器，不启动服务或修改业务数据。
+
+换电脑时先安装 Python 3.10+，双击 `初始化环境.cmd`（或运行 `./setup-environment.ps1`），在本项目创建 `.venv` 并按 `requirements.txt` 安装依赖，再双击启动入口。已有环境也会重新校验和安装所需依赖；不会修改系统 Python 的包。`.venv` 含有本机路径，不能从旧电脑直接复制使用；复制项目时排除它，在新电脑重建。初始化需要访问配置的 Python 包源；离线电脑可预先准备对应平台和 Python 版本的依赖包。
+
+服务调用的 Excel 生成脚本会继承当前服务的 Python，避免再启动另一份解释器；独立执行生成脚本时采用相同的环境选择顺序。Node 仍可由 `SOP_NODE_PATH` 指定，并保留可选的本机 Excel 生成环境和 PATH 查找。
+
+`data/service.json`、`data/service.pid` 是旧版后台进程的身份记录，不是当前启动配置。迁移后不要把旧 PID 或旧解释器路径直接改成新值；当前前台入口不依赖这些文件，也不会重新创建它们。旧服务仍在运行时，启动器仅在进程身份核对成功后接管。
 
 **Excel 运行依赖：** 安装 `requirements.txt` 后，维护表、网页导出和快照备份都可由 Python 独立生成，适用于没有 Codex 运行环境的内网机器。若本机已有 `@oai/artifact-tool`，程序仍可使用 Node 生成；该包缺失或 Node 无法启动时自动转用 Python。设置 `SOP_EXCEL_ENGINE=python` 可直接使用 Python 生成。`scripts/node_modules` 是可自动重建的本机链接，不提交到 Git。
 

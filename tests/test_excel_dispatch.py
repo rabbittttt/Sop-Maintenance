@@ -1,6 +1,9 @@
 """All Excel entry points use the offline writer when Node cannot load its package."""
 
 import subprocess
+import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -77,6 +80,21 @@ class ExcelDispatchTest(unittest.TestCase):
                      patch.object(instance, "_python_writer") as offline:
                     instance._node_writer(self.payload)
                     offline.assert_called_once_with(self.payload)
+
+    def test_node_finalizers_inherit_the_actual_service_python(self):
+        success = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, **self.payload}), "")
+        for module, cls in self.WRITERS:
+            with self.subTest(writer=cls.__name__):
+                instance = self.writer(cls)
+                with patch.dict(os.environ, {"SOP_PYTHON_PATH": "missing/old-python.exe"}), \
+                     patch.object(module, "python_excel_requested", return_value=False), \
+                     patch.object(module, "node_executable", return_value="node"), \
+                     patch.object(module.Path, "is_file", return_value=True), \
+                     patch.object(module, "ensure_artifact_tool"), \
+                     patch.object(module.subprocess, "run", return_value=success) as run:
+                    instance._node_writer(self.payload)
+                    self.assertEqual(run.call_args.kwargs["env"]["SOP_PYTHON_PATH"], sys.executable)
+                    self.assertEqual(os.environ["SOP_PYTHON_PATH"], "missing/old-python.exe")
 
 
 if __name__ == "__main__":

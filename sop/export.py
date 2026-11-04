@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .paths import PROJECT_ROOT
 from .runtime import (ArtifactDependencyError, ensure_artifact_tool,
-                         missing_artifact_module, node_executable, python_excel_requested)
+                         missing_artifact_module, node_environment, node_executable, python_excel_requested)
 from .store import ValidationError, validate_month
 
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -137,7 +137,8 @@ class PlanExport:
         try:
             completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False, allow_nan=False),
                                        text=True, encoding="utf-8", capture_output=True, timeout=self.timeout, cwd=self.root,
-                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                                       env=node_environment())
         except OSError:
             return self._python_writer(payload)
         if completed.returncode:

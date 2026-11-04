@@ -4,11 +4,17 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
 
 _ARTIFACT_LINK_LOCK = threading.Lock()
+
+
+def node_environment():
+    """Excel finalizers must use the same Python as their calling service."""
+    return {**os.environ, "SOP_PYTHON_PATH": sys.executable}
 
 
 def node_executable():

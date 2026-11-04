@@ -1,5 +1,6 @@
 """Exercise the actual Windows console launcher in disposable workspaces."""
 import json
+import ctypes
 import os
 import shutil
 import socket
@@ -60,17 +61,69 @@ class WorkbenchLauncherTest(unittest.TestCase):
         self.env = {**os.environ, "SOP_PYTHON_PATH": sys.executable, "SOP_EXCEL_ENGINE": "python",
                     "PYTHONIOENCODING": "utf-8"}
         self.processes, self.handles = [], []
+        self.service_processes = {}
         self.port = self.free_port()
 
     def tearDown(self):
-        for process in reversed(self.processes):
-            if process.poll() is None:
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                               capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                process.wait(timeout=15)
-        for handle in self.handles:
-            handle.close()
-        self.temp.cleanup()
+        try:
+            for process in reversed(self.processes):
+                if process.poll() is None:
+                    self.stop_test_process_tree(process.pid)
+                    process.wait(timeout=15)
+        finally:
+            # A Windows venv redirector can exit before its actual Python child.
+            # Only recorded health identities from this disposable workspace may
+            # be cleaned up, and a reused PID must never target another process.
+            try:
+                for pid, identity in self.service_processes.items():
+                    try:
+                        current = self.process_identity(pid)
+                    except OSError:
+                        continue
+                    if current == identity:
+                        self.stop_test_process_tree(pid)
+            finally:
+                for handle in self.handles:
+                    handle.close()
+                self.temp.cleanup()
+
+    @staticmethod
+    def stop_test_process_tree(pid):
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, timeout=15,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+
+    @staticmethod
+    def process_identity(pid):
+        """Read the real process image and creation time, including venv children."""
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel.GetProcessTimes.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        process = kernel.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+        if not process:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            image = ctypes.create_unicode_buffer(32768)
+            length = wintypes.DWORD(len(image))
+            if not kernel.QueryFullProcessImageNameW(process, 0, image, ctypes.byref(length)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            created, exited, system, user = (wintypes.FILETIME() for _ in range(4))
+            if not kernel.GetProcessTimes(process, created, exited, system, user):
+                raise ctypes.WinError(ctypes.get_last_error())
+            ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+            started = datetime.fromtimestamp((ticks - 116444736000000000) / 10000000, timezone.utc)
+            return {"executable": image.value, "started_at": started.isoformat()}
+        finally:
+            kernel.CloseHandle(process)
 
     @staticmethod
     def free_port():
@@ -104,6 +157,7 @@ class WorkbenchLauncherTest(unittest.TestCase):
                 health = self.request()
                 if health.get("launch_mode") == mode:
                     self.assertEqual(health["workspace"], str(self.root))
+                    self.service_processes[int(health["pid"])] = self.process_identity(health["pid"])
                     return health
             except (OSError, ValueError):
                 pass
@@ -187,6 +241,17 @@ class WorkbenchLauncherTest(unittest.TestCase):
                 server.shutdown()
                 worker.join(timeout=5)
 
+    def test_stale_service_record_is_not_a_runtime_configuration(self):
+        record = self.root / "data/service.json"
+        metadata = {"pid": 0, "started_at": "2000-01-01T00:00:00Z", "port": self.port,
+                    "workspace": str(self.root.parent / "old-workspace"),
+                    "executable": "missing/old-workspace/.venv/Scripts/python.exe"}
+        record.write_text(json.dumps(metadata), encoding="utf-8")
+        process = self.launch()
+        self.wait_ready(process)
+        self.assertEqual(json.loads(record.read_text(encoding="utf-8")), metadata)
+        self.close_window(process)
+
     def test_legacy_handover_checks_identity_before_stopping_process(self):
         source = self.root / "server.py"
         current = source.read_text(encoding="utf-8")
@@ -199,24 +264,25 @@ class WorkbenchLauncherTest(unittest.TestCase):
         legacy = subprocess.Popen([sys.executable, "-u", str(source), "--port", str(self.port)],
                                   env=self.env, cwd=self.root, stdout=output, stderr=output,
                                   creationflags=subprocess.CREATE_NO_WINDOW)
-        started = datetime.now(timezone.utc).isoformat()
         self.processes.append(legacy)
-        self.wait_ready(legacy, mode=None)
+        legacy_health = self.wait_ready(legacy, mode=None)
+        legacy_pid = int(legacy_health["pid"])
+        identity = self.service_processes[legacy_pid]
         source.write_text(current, encoding="utf-8")
-        metadata = {"pid": legacy.pid, "started_at": "2000-01-01T00:00:00Z", "workspace": str(self.root),
-                    "executable": sys.executable, "port": self.port}
+        metadata = {"pid": legacy_pid, "started_at": "2000-01-01T00:00:00Z", "workspace": str(self.root),
+                    "executable": identity["executable"], "port": self.port}
         record = self.root / "data/service.json"
         record.write_text(json.dumps(metadata), encoding="utf-8")
         rejected = self.run_duplicate()
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIsNone(legacy.poll(), "A stale process identity must never be killed")
-        self.assertEqual(self.request()["pid"], legacy.pid)
-        metadata["started_at"] = started
+        self.assertEqual(self.request()["pid"], legacy_pid)
+        metadata["started_at"] = identity["started_at"]
         record.write_text(json.dumps(metadata), encoding="utf-8")
-        (self.root / "data/service.pid").write_text(str(legacy.pid), encoding="ascii")
+        (self.root / "data/service.pid").write_text(str(legacy_pid), encoding="ascii")
         workbench = self.launch()
         health = self.wait_ready(workbench)
-        self.assertNotEqual(health["pid"], legacy.pid)
+        self.assertNotEqual(health["pid"], legacy_pid)
         legacy.wait(timeout=5)
         self.assertFalse(record.exists())
         self.assertFalse((self.root / "data/service.pid").exists())
