@@ -247,3 +247,127 @@ def parse_inline_sheet(sheet, manifest):
                         **({"parent_generation": candidate["parent_generation"]} if candidate.get("parent_generation") else {})})
     return {"values": values, "entries": entries, "catalog_changes": catalog_changes,
             "catalog_values": catalog_values, "removed_ids": sorted(set(products) - set(retained))}
+
+
+def parse_model_input_sheet(sheet, manifest):
+    """Read model-only inputs without turning automatic totals into overrides.
+
+    Existing rows retain their server-owned identity. Model and version catalogs
+    are intentionally not inferred from absent detail rows in this view.
+    """
+    from openpyxl.utils import get_column_letter
+
+    width = manifest["last_column"]
+    if not 6 <= width <= 200 or not isinstance(manifest.get("model_inputs"), dict):
+        raise ValidationError("车型计划行映射不完整，请重新导出。")
+    raw_rows = list(sheet.iter_rows(values_only=False))
+    if len(raw_rows) > 15000 or sum(len(row) for row in raw_rows) > 1_500_000:
+        raise ValidationError("主表行数过多，请缩小范围后重新导出。")
+    rows = [tuple(cell.value for cell in row) for row in raw_rows]
+    formulas = {(r, c) for r, row in enumerate(raw_rows, 1) for c, cell in enumerate(row, 1) if cell.data_type == "f"}
+    merged = {}
+    for column, start, end in _label_merges(sheet):
+        if start <= len(raw_rows):
+            anchor = raw_rows[start - 1][column - 1]
+            for number in range(start, min(end, len(raw_rows)) + 1):
+                merged[number, column] = (anchor.value, anchor.data_type == "f")
+
+    def value(row, column):
+        return _blank(row[column - 1]) if column <= len(row) else None
+
+    def label(number, row, column):
+        return value(row, column) if value(row, column) is not None else _blank(merged.get((number, column), (None, False))[0])
+
+    for offset, expected in enumerate(manifest["headers"]):
+        row = rows[2 + offset] if len(rows) > 2 + offset else ()
+        if [value(row, c) for c in range(1, width + 1)] != [_blank(v) for v in expected]:
+            raise ValidationError("主表的年份、月份或隐藏标识列已改变；请保留原有月份列。")
+    if any(any(_blank(v) is not None for v in row[width:]) for row in rows):
+        raise ValidationError("主表存在未识别的附加列，请保留原有月份列。")
+    originals = {row["key"]: row for row in manifest["rows"]}
+    if len(originals) != len(manifest["rows"]):
+        raise ValidationError("车型计划原始行标识重复，请重新导出。")
+    inputs = manifest["model_inputs"]
+    months = [col for col in manifest["columns"] if col["kind"] == "month"]
+    allowed_new = set(manifest["manual_editable_months"])
+    existing_names = {catalog_name_key({**item, "version": MODEL_PLAN_LABEL}) for item in inputs.values()}
+    seen, new_names = set(), set()
+    values, entries, model_entries = [], [], []
+    for number, row in enumerate(rows[4:], 5):
+        if all(_blank(v) is None for v in row):
+            continue
+        pid, kind, key = (value(row, manifest[field]) for field in ("product_column", "kind_column", "key_column"))
+        original = originals.get(key) if isinstance(key, str) else None
+        if key is not None and original is None:
+            raise ValidationError(f"第 {number} 行的隐藏行标识无法识别，请保留原始标识或插入空白行新增车型。")
+        if original is not None:
+            if key in seen or pid != original.get("product_id") or kind != original["kind"]:
+                raise ValidationError(f"第 {number} 行的隐藏行标识被复制或改动，请保留每条原始行。")
+            seen.add(key)
+            if key in inputs:
+                item = inputs[key]
+                brand = label(number, row, 1)
+                if brand is None and original.get("labels", [None])[0] is None:
+                    brand = item["brand"]
+                if (brand != item["brand"] or value(row, 2) != _blank(original["labels"][1])
+                        or any((number, c) in formulas or merged.get((number, c), (None, False))[1] for c in (1, 2))):
+                    raise ValidationError("车型汇总表暂不支持修改已有车型名称，请在网页维护中改名后重新导出；汇总车型名称由共享规则管理。")
+                allowed = set(item["editable_months"])
+                changed = []
+                for col in months:
+                    month = col["month"]
+                    amount = _quantity(value(row, col["column"]))
+                    displayed = item["display_values"][month]
+                    if month not in allowed:
+                        if amount != displayed:
+                            raise ValidationError(f"第 {number} 行 {month} 不可维护，请恢复原计划值。")
+                    elif amount != displayed:
+                        if item["product_id"] is not None:
+                            values.append({"product_id": item["product_id"], "month": month, "sop": amount})
+                        else:
+                            changed.append({"month": month, "sop": amount, "cell": f"{get_column_letter(col['column'])}{number}"})
+                if changed:
+                    model_entries.append({"brand": item["brand"], "model": item["model"],
+                                          "version": MODEL_PLAN_LABEL, "parent_generation": item.get("parent_generation"),
+                                          "plans": changed})
+            else:
+                for column, expected in enumerate(original.get("labels", [])[:2], 1):
+                    if expected is not None and value(row, column) != expected:
+                        raise ValidationError("锁单、合计和说明行的名称不能修改，请只维护车型 SOP 月计划。")
+                if original.get("metric") == "锁单数" and original["kind"] in {"product", "model_total"}:
+                    for col in months:
+                        if _quantity(value(row, col["column"])) != original.get("values", {}).get(col["month"]):
+                            raise ValidationError(f"第 {number} 行是锁单参考数，不能修改；请只修改 SOP 计划行。")
+                    if any(value(row, col["column"]) is not None for col in manifest["columns"] if col["kind"] == "year_total"):
+                        raise ValidationError("锁单参考行不能填写年度 SOP 计划量。")
+            continue
+        if pid is not None or kind not in (None, "model_total"):
+            raise ValidationError(f"第 {number} 行缺少可信车型标识，请插入空白行新增车型。")
+        labels = {field: text_field(label(number, row, column), title, 200)
+                  for field, title, column in (("brand", "品牌", 1), ("model", "车型", 2))}
+        if any((number, c) in formulas or merged.get((number, c), (None, False))[1] for c in (1, 2)):
+            raise ValidationError("新增车型的品牌和车型名称不能填写公式。")
+        if not any(labels.values()) and not any(value(row, col["column"]) is not None for col in months):
+            continue
+        if not all(labels.values()):
+            raise ValidationError(f"第 {number} 行请填写品牌和带年款的车型，版本无需填写。")
+        if not re.search(r"20\d{2}款", labels["model"]):
+            raise ValidationError(f"第 {number} 行车型请保留年款，例如 新车型 2027款。")
+        labels["version"] = MODEL_PLAN_LABEL
+        name = catalog_name_key(labels)
+        if name in existing_names or name in new_names:
+            raise ValidationError("同一品牌和车型年款不能重复新增，请在已有车型行填写计划量。")
+        new_names.add(name)
+        plans = []
+        for col in months:
+            month, amount = col["month"], _quantity(value(row, col["column"]))
+            if month not in allowed_new:
+                if amount is not None:
+                    raise ValidationError(f"新增行的 {month} 尚未开放，不能填写计划。")
+            else:
+                plans.append({"month": month, "sop": amount, "baseline_sop": None})
+        entries.append({**labels, "plans": plans})
+    if set(originals) - seen:
+        raise ValidationError("车型汇总表暂不支持删除已有行；可清空计划量，或在网页维护中停用车型后重新导出。")
+    return {"values": values, "entries": entries, "model_entries": model_entries,
+            "catalog_changes": [], "catalog_values": {}, "removed_ids": []}

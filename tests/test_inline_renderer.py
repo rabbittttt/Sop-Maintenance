@@ -144,11 +144,12 @@ class InlineRendererTest(unittest.TestCase):
         self.assertEqual(sheet.cell(plan["row"], 3).data_type, "s")
         self.assertEqual(sheet.cell(plan["row"], 3).value, "=1+1")
 
-    def test_summary_only_remains_readonly_without_extra_input_area(self):
+    def test_summary_only_supports_model_inputs_without_extra_area(self):
         wb = openpyxl.load_workbook(self.report)
         self.assertFalse(wb["_sop_import"]["B3"].value)
         sheet = wb["SOP计划"]
-        self.assertTrue(sheet.protection.sheet)
+        self.assertFalse(sheet.protection.sheet)
+        self.assertFalse(sheet["C5"].protection.locked)
         self.assertEqual(sheet["A1"].value, "SOP计划表")
         self.assertEqual(sheet["C1"].value, "2026-12")
         self.assertEqual(sheet["A5"].value, "智界")
@@ -157,6 +158,7 @@ class InlineRendererTest(unittest.TestCase):
             self.assertTrue(sheet.column_dimensions[letter].hidden)
             self.assertEqual(sheet.column_dimensions[letter].width, 0)
         self.assertTrue(all(r["kind"] != "manual_entry" for r in manifest(wb)["rows"]))
+        self.assertTrue(manifest(wb)["model_inputs"])
 
     def test_hidden_flag_is_standard_boolean_without_modern_checkbox_extensions(self):
         for path, versions in ((self.export, True), (self.partial, True), (self.report, False)):

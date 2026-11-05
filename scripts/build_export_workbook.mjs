@@ -209,8 +209,8 @@ async function main() {
   let input='';process.stdin.setEncoding('utf8');
   for await(const chunk of process.stdin)input+=chunk;
   const data=JSON.parse(input.replace(/^\uFEFF/,''));
-  if(data.roundtrip?.products?.some(p=>'summary_member_product_ids' in p)||data.row_parent_generations?.some(Boolean)) {
-    // One hierarchy renderer keeps Node-enabled and offline Excel files identical.
+  if((data.roundtrip?.inline_schema===2&&!data.include_versions)||data.roundtrip?.products?.some(p=>'summary_member_product_ids' in p)||data.row_parent_generations?.some(Boolean)) {
+    // Shared editable model and hierarchy layouts stay identical in both engines.
     const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
     const written=spawnSync(PYTHON,['-X','utf8','-c','import json,sys; from sop.xlsx_export import write_export_workbook; write_export_workbook(json.load(sys.stdin))'],
       {input:JSON.stringify(data),encoding:'utf8',cwd:root,windowsHide:true});

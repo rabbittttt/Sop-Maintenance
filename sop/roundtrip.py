@@ -16,10 +16,11 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from .export import validate_export
-from .plan_scope import is_model_plan, plan_total
+from .plan_scope import MODEL_PLAN_LABEL, is_model_plan, plan_total
 from .store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, stamp, text_field
 from .workbook import _cell_quantity
-from .table import parse_inline_sheet
+from .table import parse_inline_sheet, parse_model_input_sheet
+from .source_rules import generation_parent
 
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_EXPANDED_BYTES = 96 * 1024 * 1024
@@ -429,6 +430,11 @@ class PlanRoundtrip:
                     raise ValidationError("主表导出计划量与服务器基准不一致。")
         elif seen:
             raise ValidationError("车型汇总导出不应包含可回填的版本明细。")
+        elif "model_inputs" in manifest:
+            self._validate_model_inputs(manifest, roundtrip)
+            parsed = parse_model_input_sheet(workbook[PLAN_SHEET], manifest)
+            if parsed["values"] or parsed["entries"] or parsed["model_entries"]:
+                raise ValidationError("车型汇总导出与服务器计划基准不一致。")
         mappings = []
         for row in manifest["rows"]:
             if row["kind"] != "product" or row.get("metric", "SOP计划量") != "SOP计划量":
@@ -438,7 +444,59 @@ class PlanRoundtrip:
                     mappings.append({"kind": "plan", "product_id": row["product_id"], "month": col["month"],
                                      "cell": f"{openpyxl.utils.get_column_letter(col['column'])}{row['row']}",
                                      "baseline_sop": row["values"].get(col["month"])})
+        if not roundtrip["include_versions"] and "model_inputs" in manifest:
+            for key, item in manifest["model_inputs"].items():
+                if item["product_id"] is None:
+                    continue
+                row = next(row for row in manifest["rows"] if row["key"] == key)
+                for col in manifest["columns"]:
+                    if col["kind"] == "month" and col["month"] in item["editable_months"]:
+                        mappings.append({"kind": "plan", "product_id": item["product_id"], "month": col["month"],
+                                         "cell": f"{openpyxl.utils.get_column_letter(col['column'])}{row['row']}",
+                                         "baseline_sop": item["baseline_values"][col["month"]]})
         return {**roundtrip, "manifest": manifest, "mappings": mappings, "snapshot": snapshot, "inline_schema": 2}
+
+    def _validate_model_inputs(self, manifest, context):
+        """Bind every writable model row to the authoritative selected group."""
+        inputs = manifest["model_inputs"]
+        rows = {row["key"]: row for row in manifest["rows"]
+                if row["kind"] == "model_total" and row.get("metric") == "SOP计划量"}
+        if not isinstance(inputs, dict) or set(inputs) != set(rows):
+            raise ValidationError("车型计划输入行映射不完整，请重新导出。")
+        products = {p["id"]: p for p in context["products"]}
+        plans = {(pid, month): {"sop": context["plan_values_by_product"][pid][month],
+                               "auto_sop": context["automatic_plan_values_by_product"][pid][month]}
+                 for pid in products for month in context["months"]}
+        current = self.store.clock().astimezone(TZ).strftime("%Y-%m")
+        seen = set()
+        for key, item in inputs.items():
+            if not isinstance(item, dict):
+                raise ValidationError("车型计划输入行格式无效。")
+            group = item.get("brand"), item.get("model"), item.get("parent_generation") or None
+            members = [p for p in products.values()
+                       if (p["brand"], p["model"], p.get("parent_generation") or None) == group]
+            ids = item.get("member_product_ids")
+            if (not members or group in seen or not isinstance(ids, list) or len(set(ids)) != len(ids)
+                    or set(ids) != {p["id"] for p in members}):
+                raise ValidationError("车型计划与导出的品牌、车型或层级范围不一致。")
+            seen.add(group)
+            anchors = [p for p in members if is_model_plan(p) and not p.get("read_only")]
+            if len(anchors) > 1 or item.get("product_id") != (anchors[0]["id"] if anchors else None):
+                raise ValidationError("车型总量稳定编码与服务器记录不一致。")
+            pid = item.get("product_id")
+            baseline = {month: context["plan_values_by_product"][pid][month] if pid else None
+                        for month in context["months"]}
+            display = {month: plan_total(members, month, plans) for month in context["months"]}
+            if item.get("baseline_values") != baseline or item.get("display_values") != display or rows[key]["values"] != display:
+                raise ValidationError("车型总量原始值或显示合计与服务器记录不一致。")
+            allowed = item.get("editable_months")
+            if (not isinstance(allowed, list) or len(set(allowed)) != len(allowed)
+                    or not set(allowed).issubset(context["manual_editable_months"])
+                    or (pid and allowed != context["editable_months_by_product"][pid])
+                    or (all(p.get("read_only") for p in members) and allowed)
+                    or (not pid and not any(p.get("active", True) and not p.get("read_only") for p in members)
+                        and any(month >= current for month in allowed))):
+                raise ValidationError("车型总量可维护月份与服务器开放范围不一致。")
 
     def _parse(self, content):
         with _read_workbook(content) as workbook:
@@ -448,15 +506,26 @@ class PlanRoundtrip:
             if row is None:
                 raise ValidationError("这个文件不属于当前看板，或导出标识已被修改，请在本看板重新导出。")
             expected = json.loads(row["payload"])
-            if not versions or not expected["include_versions"]:
-                raise ValidationError("该文件只有车型汇总，不能确定各版本计划量。请勾选“包含版本明细”重新导出后回填。")
+            model_only = (not expected["include_versions"] and isinstance(expected.get("manifest", {}).get("model_inputs"), dict))
+            if versions != expected["include_versions"]:
+                raise ValidationError("导出明细选项标识已改变，请重新导出。")
+            if not versions and not model_only:
+                raise ValidationError("该旧文件只有车型汇总，没有可回填的车型编码，请重新导出最新车型计划表后维护。")
             actual = _snapshot(workbook)
             if set(actual) != set(expected["snapshot"]):
                 raise ValidationError("工作表已被增加、删除或重命名，请保留原导出格式。")
             if expected.get("manifest") is not None:
                 if actual[IMPORT_SHEET]["cells"] != expected["snapshot"][IMPORT_SHEET]["cells"]:
                     raise ValidationError("隐藏的原始行映射已被改动，请保留该标识页。")
-                parsed = parse_inline_sheet(workbook[PLAN_SHEET], expected["manifest"])
+                if model_only:
+                    for address in set(actual[PLAN_SHEET]["cells"]) | set(expected["snapshot"][PLAN_SHEET]["cells"]):
+                        if re.search(r"[A-Z]+[12]$", address) and actual[PLAN_SHEET]["cells"].get(address) != expected["snapshot"][PLAN_SHEET]["cells"].get(address):
+                            raise ValidationError("主表标题或说明已被改动，请保留原导出格式。")
+                    parsed = parse_model_input_sheet(workbook[PLAN_SHEET], expected["manifest"])
+                    expected["_model_only"] = True
+                    expected["_model_entries"] = parsed["model_entries"]
+                else:
+                    parsed = parse_inline_sheet(workbook[PLAN_SHEET], expected["manifest"])
                 expected["_catalog_changes"] = parsed["catalog_changes"]
                 values = {_key(r["product_id"], r["month"]): r["sop"] for r in parsed["values"]}
                 return token, expected, values, parsed["entries"]
@@ -507,20 +576,43 @@ class PlanRoundtrip:
                 if exported.get("manifest") is not None:
                     previous = self.store.db.execute("SELECT payload FROM plan_download_entry_imports WHERE token=?", (token,)).fetchone()
                     accepted_entries = json.loads(previous["payload"]) if previous else {}
-                    supplied_names = {json.dumps(catalog_name_key(entry), ensure_ascii=False, separators=(",", ":")) for entry in entries}
+                    supplied_names = {json.dumps(catalog_name_key(entry), ensure_ascii=False, separators=(",", ":"))
+                                      for entry in [*entries, *exported.get("_model_entries", [])]}
                     if set(accepted_entries) - supplied_names and supplied_names - set(accepted_entries):
                         raise ValidationError("此文件的新增行已导入过，旧副本中无法安全识别这些行的再次更名。请重新导出最新明细，再更名或删除。")
                     for name in supplied_names & set(accepted_entries):
                         product = catalog.get(accepted_entries[name])
                         if product is None or json.dumps(catalog_name_key(product), ensure_ascii=False, separators=(",", ":")) != name:
                             raise ValidationError("此文件以前新增的版本已在网页改名或合并。请重新导出最新明细，避免重复建立版本。")
+                # A model row without an override at export time may now have a
+                # total created by a previous import or a concurrent web edit.
+                # Resolve only that complete model identity, never member versions.
+                for entry in exported.get("_model_entries", []):
+                    name = catalog_name_key(entry)
+                    candidates = [p for p in catalog.values() if is_model_plan(p) and not p.get("summary_generation")
+                                  and catalog_name_key(p) == name]
+                    if len(candidates) > 1:
+                        raise ValidationError("车型总量对应多个记录，请重新导出最新车型计划表。")
+                    if not candidates:
+                        if any(plan["sop"] is not None for plan in entry["plans"]):
+                            entries.append({field: entry[field] for field in ("brand", "model", "version", "parent_generation", "plans")})
+                        continue
+                    product = candidates[0]
+                    if generation_parent(product, self.store._generation_rules()) != entry.get("parent_generation"):
+                        raise ValidationError("车型层级规则已变化，请重新导出后维护车型总量。")
+                    pid = product["id"]
+                    for plan in entry["plans"]:
+                        key = _key(pid, plan["month"])
+                        exported["baseline"][key] = {"product_id": pid, "month": plan["month"], "baseline_sop": None, "revision": 0}
+                        exported["mappings"].append({"kind": "plan", "product_id": pid, "month": plan["month"], "cell": plan["cell"]})
+                        values[key] = plan["sop"]
                 old_products = {p["id"]: p for p in exported["products"]}
                 cells = {_key(m["product_id"], m["month"]): m["cell"] for m in exported["mappings"] if m["kind"] == "plan"}
                 changes, conflicts = [], []
                 for key, value in values.items():
                     base = exported["baseline"][key]
                     pid, month, original = base["product_id"], base["month"], base["baseline_sop"]
-                    if value == original:
+                    if value == original and not exported.get("_model_only"):
                         continue
                     if pid not in catalog:
                         raise ValidationError("文件中修改的版本已被合并或移除，请重新导出当前版本后维护。")
@@ -530,7 +622,7 @@ class PlanRoundtrip:
                     if value == database:
                         continue
                     if database != original:
-                        product = catalog.get(pid, old_products[pid])
+                        product = catalog.get(pid) or old_products[pid]
                         conflicts.append({"product_id": pid, "month": month, "baseline": original, "workbook": value,
                                           "database": database, "current": current or None, "cell": cells[key],
                                           **{field: product.get(field, "") for field in ("brand", "model", "version")}})

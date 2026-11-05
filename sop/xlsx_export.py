@@ -16,7 +16,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from .brand import brand_order_key
-from .plan_scope import MODEL_PLAN_LABEL
+from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
 from .workbook import generation_model_groups
 from .xlsx_style import PLAN_TITLE, plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
@@ -59,7 +59,7 @@ def _subtitle(data, inline):
     if inline:
         if data["include_versions"]:
             return plan_guidance(data["include_locks"], any(p.get("read_only") for p in data.get("roundtrip", {}).get("products", [])))
-        return "单位：辆。当前为车型汇总，回填计划请导出版本明细。年度合计为全年SOP计划量。"
+        return "单位：辆。直接填车型月计划，填写值优先；清空并导回后恢复明细汇总。新增行填品牌和车型年款。锁单无需填写，合计自动计算。"
     if data.get("roundtrip"):
         return "单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；锁单行只读。"
     return "单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；带“锁单”字样的行为交车锁单数。"
@@ -67,6 +67,7 @@ def _subtitle(data, inline):
 
 def _layout(data):
     months = data["months"]
+    model_only = data.get("roundtrip", {}).get("inline_schema") == 2 and not data["include_versions"]
     if not months or months != sorted(set(months)):
         raise ValueError("导出月份必须按时间排列且不重复。")
     identity = ["品牌", "车型"] + (["版本"] if data["include_versions"] else [])
@@ -138,7 +139,7 @@ def _layout(data):
             if not _quantity(value):
                 raise ValueError("导出包含无效数量。")
             row["values"][column] = value
-            if kind != "product" or source["metric"] != "SOP计划量" or item["kind"] != "year_total":
+            if (kind != "product" and not (model_only and kind == "model_total")) or source["metric"] != "SOP计划量" or item["kind"] != "year_total":
                 continue
             year = next(y for y in years if y["year"] == item["year"])
             if not data.get("roundtrip") and not year["full"]:
@@ -253,7 +254,25 @@ def _layout(data):
                     merges.append(f"B{model_first}:B{next_row - 1}")
             for field in fields:
                 row = add_source(summaries[field][0], "model_total")
-                row["labels"][1] = model + (" 锁单" if field == "锁单数" else "") + " 合计"
+                row["labels"][1] = model if model_only and field == "SOP计划量" else model + (" 锁单" if field == "锁单数" else "") + " 合计"
+                if model_only and field == "SOP计划量":
+                    context = data["roundtrip"]
+                    members = [p for p in catalog_products if p["brand"] == brand and p["model"] == model
+                               and (p.get("parent_generation") or None) == (parent_generation or None)]
+                    totals = [p for p in members if is_model_plan(p) and not p.get("read_only")]
+                    if len(totals) > 1:
+                        raise ValueError("同一车型存在多个总量输入行，请刷新后重试。")
+                    total = totals[0] if totals else None
+                    allowed = context["editable_months_by_product"].get(total["id"], []) if total else [
+                        m for m in context["manual_editable_months"]
+                        if any(not p.get("read_only") and (p.get("active", True) or m < data["current_month"]) for p in members)]
+                    row["model_input"] = {
+                        "brand": brand, "model": model, "parent_generation": parent_generation,
+                        "product_id": total["id"] if total else None,
+                        "member_product_ids": [p["id"] for p in members],
+                        "baseline_values": {m: context.get("plan_values_by_product", {}).get(total["id"], {}).get(m) if total else None for m in months},
+                        "display_values": {c["month"]: row["values"][c["column"]] for c in columns if c["kind"] == "month"},
+                        "editable_months": list(allowed)}
                 if data["include_versions"] and field == "SOP计划量":
                     if summary:
                         summary_totals[summary] = (row, detail_rows[field])
@@ -327,7 +346,7 @@ def _layout(data):
 
 def _manifest(data, layout):
     context = data["roundtrip"]
-    return {"columns": layout["columns"], "merges": layout["merges"],
+    manifest = {"columns": layout["columns"], "merges": layout["merges"],
             "products": context["products"],
             "rows": [{"row": row["row"], "key": row["key"], "kind": row["kind"],
                       "product_id": row["product_id"], "metric": row["metric"],
@@ -341,6 +360,9 @@ def _manifest(data, layout):
             "editable_months_by_product": context["editable_months_by_product"],
             "manual_editable_months": context["manual_editable_months"],
             "plan_revisions_by_product": context.get("plan_revisions_by_product", {})}
+    if not data["include_versions"]:
+        manifest["model_inputs"] = {row["key"]: row["model_input"] for row in layout["rows"] if "model_input" in row}
+    return manifest
 
 
 def write_export_workbook(payload: dict) -> None:
@@ -382,6 +404,10 @@ def write_export_workbook(payload: dict) -> None:
             if label is not None:
                 _text(sheet.cell(number, index), label)
         month_states = {}
+        model_input = row.get("model_input")
+        if model_input:
+            month_states = {f"{_column(item['column'])}{number}": {"editable": item["month"] in model_input["editable_months"]}
+                            for item in layout["columns"] if item["kind"] == "month"}
         if context and data["include_versions"] and row["kind"] == "product" and row["metric"] == "SOP计划量":
             editable = context["editable_months_by_product"][row["product_id"]]
             product = next((p for p in context.get("products", []) if p["id"] == row["product_id"]), None)
@@ -393,7 +419,7 @@ def write_export_workbook(payload: dict) -> None:
                 if product:
                     state["applicable"] = is_editable or ((not product.get("start_month") or item["month"] >= product["start_month"]) and (not product.get("end_month") or item["month"] <= product["end_month"]))
                 month_states[f"{_column(item['column'])}{number}"] = state
-        style_plan_row(sheet, row=number, kind=row["kind"], identity_columns=len(layout["identity"]),
+        style_plan_row(sheet, row=number, kind="product" if model_input else row["kind"], identity_columns=len(layout["identity"]),
                        visible_last_column=layout["width"], columns=layout["columns"],
                        version=row["version"], month_states=month_states)
         for item in layout["columns"]:
@@ -409,6 +435,9 @@ def write_export_workbook(payload: dict) -> None:
                     and item["month"] in context["editable_months_by_product"][row["product_id"]]):
                 cell.protection = Protection(locked=False)
                 validation.add(cell)
+            if model_input and item["kind"] == "month" and item["month"] in model_input["editable_months"]:
+                cell.protection = Protection(locked=False)
+                validation.add(cell)
         if layout["inline"]:
             _text(sheet.cell(number, layout["product_column"]), row["product_id"])
             _text(sheet.cell(number, layout["kind_column"]), row["kind"])
@@ -421,15 +450,15 @@ def write_export_workbook(payload: dict) -> None:
             if data["include_versions"] and row["kind"] == "product" and row["metric"] == "SOP计划量":
                 for column in range(1, 4):
                     sheet.cell(number, column).protection = Protection(locked=bool(product and (product.get("read_only") or product.get("identity_read_only"))))
-    # An empty dataValidations container is invalid SpreadsheetML. Summary
-    # downloads and versions with no editable months must omit it entirely.
+    # An empty dataValidations container is invalid SpreadsheetML.
+    # Downloads with no editable months must omit it entirely.
     if validation.sqref:
         sheet.add_data_validation(validation)
     for reference in layout["merges"]:
         sheet.merge_cells(reference)
     sheet.freeze_panes = f"{_column(layout['first_value'])}5"
     sheet.sheet_properties.outlinePr.summaryBelow = False
-    if not (layout["inline"] and data["include_versions"]):
+    if not layout["inline"]:
         sheet.protection.sheet = True
         sheet.protection.selectLockedCells = False
         sheet.protection.selectUnlockedCells = False

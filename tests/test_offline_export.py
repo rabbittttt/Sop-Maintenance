@@ -150,7 +150,7 @@ class OfflineExportTest(unittest.TestCase):
         self.assertEqual(self.store.db.execute(
             "SELECT sop FROM plans WHERE product_id='a' AND month='2026-10'").fetchone()[0], 41)
 
-    def test_without_locks_or_versions_keeps_selected_months_and_read_only(self):
+    def test_without_versions_is_an_editable_model_plan(self):
         self.save("a", "2026-10", 10)
         self.generate(self.body(locks=False, versions=False))
         book = openpyxl.load_workbook(self.path)
@@ -162,8 +162,9 @@ class OfflineExportTest(unittest.TestCase):
             self.assertIn("A5:A6", {str(item) for item in sheet.merged_cells.ranges})
             self.assertEqual(sheet["C4"].value, "10月")
             self.assertEqual(sheet["E4"].value, "年度合计")
-            self.assertTrue(sheet.protection.sheet)
-            self.assertEqual(sheet["B5"].value, "M 合计")
+            self.assertFalse(sheet.protection.sheet)
+            self.assertFalse(sheet["C5"].protection.locked)
+            self.assertEqual(sheet["B5"].value, "M")
             self.assertEqual(sheet["C5"].value, 10)
             self.assertEqual(sheet["F5"].value, None)
             for letter in "FGH":
@@ -180,6 +181,7 @@ class OfflineExportTest(unittest.TestCase):
         for locks, versions in ((False, False), (True, False), (False, True)):
             with self.subTest(locks=locks, versions=versions):
                 payload = export_payload(locks=locks, versions=versions)
+                payload["roundtrip"]["manual_editable_months"] = []
                 if versions:
                     payload["roundtrip"]["editable_months_by_product"] = {
                         product["id"]: [] for product in payload["roundtrip"]["products"]}
