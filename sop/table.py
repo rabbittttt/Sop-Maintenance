@@ -101,7 +101,8 @@ def parse_inline_sheet(sheet, manifest):
         raise ValidationError("主表原始版本映射不完整。")
     original_names = {}
     for pid, product in products.items():
-        original_names.setdefault(catalog_name_key(product), []).append(pid)
+        if not product.get("identity_read_only"):
+            original_names.setdefault(catalog_name_key(product), []).append(pid)
     has_merged_detail_labels = any(
         (match := _VERTICAL_LABEL_MERGE.fullmatch(reference)) and int(match.group(2)) >= 5
         for reference in manifest.get("merges", ())
@@ -166,6 +167,8 @@ def parse_inline_sheet(sheet, manifest):
         if original is not None and is_model_plan(products[pid]) and parsed_labels["version"] != MODEL_PLAN_LABEL:
             raise ValidationError("车型总量行的版本标识请保留；需要分版本时请新增版本行。")
         candidate = {"number": number, "row": row, "labels": parsed_labels}
+        if original is not None and products[pid].get("identity_read_only") and catalog_name_key(parsed_labels) != catalog_name_key(products[pid]):
+            raise ValidationError("汇总父车型名称由共享规则管理，请只修改其计划量。")
         if original is not None and products[pid].get("read_only") and catalog_name_key(parsed_labels) != catalog_name_key(products[pid]):
             raise ValidationError(f"第 {number} 行是自动汇总代际，名称只读；请切换单代际维护。")
         if original is None:
@@ -176,6 +179,11 @@ def parse_inline_sheet(sheet, manifest):
                 pid = matches[0]
                 original = original_plans[pid]
         if original is None:
+            scopes = {product.get("parent_generation") for product in products.values()
+                      if product.get("brand") == parsed_labels["brand"] and product.get("model") == parsed_labels["model"]
+                      and not product.get("identity_read_only")}
+            if len(scopes) == 1 and next(iter(scopes)):
+                candidate["parent_generation"] = next(iter(scopes))
             new_rows.append(candidate)
         else:
             candidates.setdefault(pid, []).append(candidate)
@@ -200,6 +208,8 @@ def parse_inline_sheet(sheet, manifest):
         baseline = {field: product.get(field) for field in ("brand", "model", "version", "active", "revision")}
         baseline["active"] = product.get("active", True)
         if candidate is None:
+            if product.get("identity_read_only"):
+                raise ValidationError("汇总父车型总量行由共享规则管理，不能删除；可清空计划量恢复单代际汇总。")
             if product.get("read_only"):
                 raise ValidationError("自动汇总代际行不能删除；请切换单代际维护或调整共享汇总规则。")
             catalog_values[pid] = {field: baseline[field] for field in ("brand", "model", "version", "active")}
@@ -233,6 +243,7 @@ def parse_inline_sheet(sheet, manifest):
                     raise ValidationError(f"新增行的 {month} 尚未开放，不能填写计划。")
                 continue
             plans.append({"month": month, "sop": _quantity(raw), "baseline_sop": None})
-        entries.append({**candidate["labels"], "plans": plans})
+        entries.append({**candidate["labels"], "plans": plans,
+                        **({"parent_generation": candidate["parent_generation"]} if candidate.get("parent_generation") else {})})
     return {"values": values, "entries": entries, "catalog_changes": catalog_changes,
             "catalog_values": catalog_values, "removed_ids": sorted(set(products) - set(retained))}

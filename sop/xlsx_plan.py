@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.styles import Protection
+from openpyxl.styles import Alignment, Protection
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -135,7 +135,7 @@ def write_plan_workbook(payload: dict) -> None:
             if item["kind"] == "product":
                 _literal(sheet.cell(row, spec["product_column"]), item["product_id"])
                 for column in range(1, 4):
-                    sheet.cell(row, column).protection = Protection(locked=bool(item.get("read_only")))
+                    sheet.cell(row, column).protection = Protection(locked=bool(item.get("read_only") or item.get("identity_read_only")))
                 for month in month_columns:
                     address = f"{get_column_letter(month['column'])}{row}"
                     mapping = mappings.get(address)
@@ -152,6 +152,9 @@ def write_plan_workbook(payload: dict) -> None:
             style_plan_row(sheet, row=row, kind=item["kind"],
                            visible_last_column=spec["visible_last_column"], columns=columns,
                            version=item.get("version", ""), month_states=states)
+            if item.get("outline_level"):
+                sheet.row_dimensions[row].outlineLevel = item["outline_level"]
+                sheet.cell(row, 2).alignment = Alignment(vertical="center", indent=item["outline_level"])
             if item.get("hidden"):
                 sheet.row_dimensions[row].hidden = True
 
@@ -163,6 +166,7 @@ def write_plan_workbook(payload: dict) -> None:
         for reference in spec["merges"]:
             sheet.merge_cells(reference)
         sheet.freeze_panes = f"D{spec['first_data_row']}"
+        sheet.sheet_properties.outlinePr.summaryBelow = False
         caches[sheet.title] = _formula_results(sheet, spec["formulas"])
         hidden_columns[sheet.title] = (spec["visible_last_column"] + 1, spec["last_column"])
 

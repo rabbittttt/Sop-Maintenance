@@ -14,8 +14,9 @@ from pathlib import Path
 from .brand import brand_order_key
 from .plan_scope import MODEL_PLAN_LABEL, is_model_plan, effective_products, plan_total
 from .source_rules import (MergeRuleError, load_merge_rules, summary_names, project_generation_sources,
-                              normalize_generation, product_display_model, catalog_model_input,
-                              _generations as source_generations)
+                           normalize_generation, product_display_model, catalog_model_input,
+                           project_generation_hierarchy, generation_display_model, generation_parent,
+                           _generations as source_generations)
 
 TZ = timezone(timedelta(hours=8))
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -200,6 +201,9 @@ class SOPStore:
             label TEXT NOT NULL, plan_count INTEGER NOT NULL, payload TEXT NOT NULL,
             auto_key TEXT UNIQUE);
         CREATE TABLE IF NOT EXISTS generation_summary_history (generation TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS generation_rules_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, signature TEXT NOT NULL,
+            recorded_at TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS grid_batch_requests (
             request_id TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL);
         CREATE TRIGGER IF NOT EXISTS snapshots_no_update BEFORE UPDATE ON snapshots
@@ -213,7 +217,12 @@ class SOPStore:
                 self.db.execute(f"ALTER TABLE product_catalog ADD COLUMN {name} {definition}")
         self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("service_started_at", json.dumps(stamp(self.clock()))))
         self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("bridge_m6", "true"))
-        self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("generation_mode", json.dumps("detail")))
+        self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("generation_mode", json.dumps("summary")))
+        hierarchy_migration = self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("summary_hierarchy_version", "1"))
+        if hierarchy_migration.rowcount:
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", ("generation_mode", json.dumps("summary")))
+            if self.db.execute("SELECT 1 FROM settings_versions LIMIT 1").fetchone():
+                self.db.execute("INSERT INTO settings_versions(recorded_at,payload) VALUES (?,?)", (stamp(self.clock()), json.dumps(self.settings())))
         self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("zero_week_anchor", json.dumps("month_week_majority")))
         if not self.db.execute("SELECT 1 FROM settings_versions LIMIT 1").fetchone():
             self.db.execute("INSERT INTO settings_versions(recorded_at,payload) VALUES (?,?)", (stamp(self.clock()), json.dumps(self.settings())))
@@ -269,7 +278,7 @@ class SOPStore:
         overrides = json.loads(row["overrides_json"])
         item = dict(source)
         item["version"] = display_version(source.get("version"), source.get("configuration") or "未命名版本")
-        item.update({key: value for key, value in overrides.items() if key in {"brand", "model", "version", "plan_level"}})
+        item.update({key: value for key, value in overrides.items() if key in {"brand", "model", "version", "plan_level", "summary_generation"}})
         item["version"] = display_version(item.get("version"))
         if is_model_plan(item):
             item.update(plan_level="model", version=MODEL_PLAN_LABEL)
@@ -302,10 +311,10 @@ class SOPStore:
             items.append(item)
         counts = {}
         for item in items:
-            name = catalog_name_key(item)
+            name = (item.get("summary_generation", ""), catalog_name_key(item))
             counts[name] = counts.get(name, 0) + 1
         for item in items:
-            item["name_conflict"] = counts[catalog_name_key(item)] > 1
+            item["name_conflict"] = counts[(item.get("summary_generation", ""), catalog_name_key(item))] > 1
         return sorted(items, key=lambda p: (brand_order_key(p.get("brand", "")), p.get("model", ""), p.get("version", ""), p["id"]))
 
     def source_aliases(self):
@@ -341,6 +350,28 @@ class SOPStore:
             result["version_reference"] = {**data["version_reference"], "sales": remap(data["version_reference"].get("sales", []))}
         return result
 
+    def _ensure_summary_parents(self, rules):
+        created = False
+        recorded = stamp(self.clock())
+        for name in rules["groups"]:
+            pid = "summary_plan_" + hashlib.sha256(normalize_generation(name).encode("utf-8")).hexdigest()[:24]
+            labels = {"brand": normalize_generation(name).partition(" ")[0],
+                      "model": generation_display_model(name), "version": MODEL_PLAN_LABEL,
+                      "plan_level": "model", "summary_generation": name}
+            cursor = self.db.execute("""INSERT OR IGNORE INTO product_catalog
+                (id,source_json,overrides_json,active,source_present,revision,created_at,updated_at,start_month)
+                VALUES (?,?,?,?,?,?,?,?,?)""", (pid, "{}", json.dumps(labels, ensure_ascii=False),
+                1, 0, 1, recorded, recorded, "1900-01"))
+            created = bool(cursor.rowcount) or created
+            before = self.db.execute("SELECT overrides_json FROM product_catalog WHERE id=?", (pid,)).fetchone()
+            overrides = json.loads(before["overrides_json"])
+            if any(overrides.get(field) != value for field, value in labels.items()):
+                self.db.execute("UPDATE product_catalog SET overrides_json=?,revision=revision+1,updated_at=? WHERE id=?",
+                                (json.dumps({**overrides, **labels}, ensure_ascii=False), recorded, pid))
+                created = True
+        if created:
+            self._record_catalog("汇总规则", "建立或更新汇总代际计划总量；原计划保留")
+
     def _generation_rules(self):
         try:
             rules = load_merge_rules()
@@ -348,6 +379,11 @@ class SOPStore:
             raise ValidationError(str(error)) from error
         self.db.executemany("INSERT OR IGNORE INTO generation_summary_history(generation) VALUES (?)",
                             [(name,) for name in summary_names(rules)])
+        previous = self.db.execute("SELECT signature FROM generation_rules_versions ORDER BY id DESC LIMIT 1").fetchone()
+        if not previous or previous["signature"] != rules["signature"]:
+            self.db.execute("INSERT INTO generation_rules_versions(signature,recorded_at,payload) VALUES (?,?,?)",
+                            (rules["signature"], stamp(self.clock()), json.dumps(rules["groups"], ensure_ascii=False)))
+        self._ensure_summary_parents(rules)
         return rules
 
     def generation_view(self):
@@ -356,13 +392,13 @@ class SOPStore:
             mode = self.settings().get("generation_mode", "detail")
             return {"mode": mode, "rule_signature": rules["signature"],
                     "signature": mode + ":" + rules["signature"], "config_path": rules["config_path"],
-                    "derived": mode == "summary"}
+                    "derived": False, "hierarchy": mode == "summary"}
 
     def _catalog_sales(self, data, include_excluded=False):
+        rules = self._generation_rules()
         catalog = self._catalog_items()
         if include_excluded:
             return {**data, "products": catalog}
-        rules = self._generation_rules()
         known = {row[0] for row in self.db.execute("SELECT generation FROM generation_summary_history")}
         mode = self.settings().get("generation_mode", "detail")
         # Filter raw summary identities before aliases can mix them with real
@@ -370,7 +406,11 @@ class SOPStore:
         source, _ = project_generation_sources(data, "detail", rules, known)
         result = {**self._remap_sales(source, self.source_aliases()), "products": catalog}
         try:
-            result, warnings = project_generation_sources(result, mode, rules, known)
+            if mode == "summary":
+                result, warnings = project_generation_hierarchy(result, rules, known)
+            else:
+                result["products"] = [p for p in result["products"] if not p.get("summary_generation")]
+                result, warnings = project_generation_sources(result, mode, rules, known)
         except MergeRuleError as error:
             raise ValidationError(str(error)) from error
         result["products"] = sorted(result["products"], key=lambda p: (brand_order_key(p.get("brand", "")),
@@ -383,7 +423,7 @@ class SOPStore:
             product["name_conflict"] = visible_names[catalog_name_key(product)] > 1
         result["generation_view"] = {"mode": mode, "rule_signature": rules["signature"],
             "signature": mode + ":" + rules["signature"], "config_path": rules["config_path"],
-            "warnings": warnings, "derived": mode == "summary"}
+            "warnings": warnings, "derived": False, "hierarchy": mode == "summary"}
         meta = dict(result.get("meta", {}))
         coverage = dict(meta.get("metric_coverage", {}))
         locks = [r for r in result.get("sales", []) if r.get("metric") == "locked_orders"]
@@ -395,6 +435,10 @@ class SOPStore:
             "monthly_total": known_sum(locks), "model_monthly_total": known_sum(model_locks),
             "monthly_records": len(locks), "model_monthly_records": len(model_locks)}
         result["meta"] = {**meta, "metric_coverage": coverage}
+        if "generation_members" in result:
+            member_ids = {p["id"] for p in result["generation_members"]["products"]}
+            result["generation_members"]["plans"] = [dict(row) for row in self.db.execute("SELECT * FROM plans ORDER BY product_id,month") if row["product_id"] in member_ids]
+            result["generation_members"]["shipments"] = [dict(row) for row in self.db.execute("SELECT * FROM shipments ORDER BY product_id,month") if row["product_id"] in member_ids]
         return result
 
     def view_plans(self, sales=None):
@@ -407,6 +451,20 @@ class SOPStore:
             plan_index = {(r["product_id"], r["month"]): r for r in rows}
             result = [row for row in rows if row["product_id"] in visible and not visible[row["product_id"]].get("read_only")]
             for product in sales["products"]:
+                if product.get("summary_generation") and not product.get("read_only"):
+                    members = set(product.get("summary_member_product_ids", []))
+                    member_products = [p for p in sales.get("generation_members", {}).get("products", []) if p["id"] in members]
+                    months = sorted({row["month"] for row in rows if row["product_id"] in members | {product["id"]}})
+                    result = [row for row in result if row["product_id"] != product["id"]]
+                    for month in months:
+                        item = dict(plan_index.get((product["id"], month), {"product_id": product["id"], "month": month, "sop": None, "forecast": None, "revision": 0}))
+                        chosen = effective_products(member_products, month, plan_index)
+                        known = sum(plan_index.get((p["id"], month), {}).get("sop") is not None for p in chosen)
+                        item.update(auto_sop=plan_total(member_products, month, plan_index),
+                                    auto_known_members=known, auto_total_members=len(chosen),
+                                    auto_partial=known < len(chosen) or bool(product.get("missing_member_generations")))
+                        result.append(item)
+                    continue
                 if not product.get("read_only"):
                     continue
                 members = set(product.get("model_member_product_ids", product["member_product_ids"]))
@@ -654,6 +712,9 @@ class SOPStore:
                     if revision != (before["revision"] if before else 0):
                         conflicts.append({"id": pid, "current": self._catalog_product(before) if before else None})
                     prior = self._catalog_product(before) if before else {}
+                    if prior.get("summary_generation") and any(field in change and change[field] != prior.get(field)
+                            for field in ("brand", "model", "version", "active")):
+                        raise ValidationError("汇总车型名称和状态由共享规则维护，当前行仅维护计划数量。")
                     overrides = json.loads(before["overrides_json"]) if before else {}
                     for field, label in (("brand", "品牌"), ("model", "车型"), ("version", "版本名称")):
                         if field in change or not before:
@@ -673,7 +734,7 @@ class SOPStore:
                             if value != prior.get(field) or not before:
                                 overrides[field] = value
                     if is_model_plan({**prior, **overrides}):
-                        if not re.search(r"20\d{2}款", overrides.get("model", prior.get("model", ""))):
+                        if not prior.get("summary_generation") and not re.search(r"20\d{2}款", overrides.get("model", prior.get("model", ""))):
                             raise ValidationError("车型总量请填写带年款的车型名称，例如 M5 2026款。")
                         if change.get("bind_source_id"):
                             raise ValidationError("车型总量无需关联版本销量来源。")
@@ -790,7 +851,8 @@ class SOPStore:
         reason = text_field(body.get("reason"), "变更原因")
         notes = text_field(body.get("notes"), "备注", 5000)
         if products is None:
-            products = {str(p["id"]): p for p in self.read_sales()["products"]}
+            sales = self.read_sales()
+            products = {str(p["id"]): p for p in sales["products"] + sales.get("generation_members", {}).get("products", [])}
         seen = set()
         result = []
         for change in body["changes"]:
@@ -851,9 +913,9 @@ class SOPStore:
             if not is_model_plan(product):
                 continue
             model = product_display_model(product)
-            if not re.search(r"20\d{2}款", model):
+            if not product.get("summary_generation") and not re.search(r"20\d{2}款", model):
                 raise ValidationError("车型总量请保留车型年款，例如 M5 2026款。")
-            key = normalize_generation(product["brand"]), model
+            key = product.get("summary_generation", ""), normalize_generation(product["brand"]), model
             if key in seen:
                 raise ValidationError("同一车型年款只能保留一条车型总量，请维护已有记录。")
             seen.add(key)
@@ -879,6 +941,9 @@ class SOPStore:
             if row is None or pid in aliases:
                 raise ValidationError("表格中的版本已合并或不在当前目录，请重新导出后修改。")
             prior = self._catalog_product(row)
+            if prior.get("summary_generation") and any(field in change and change[field] != prior.get(field)
+                    for field in ("brand", "model", "version", "active")):
+                raise ValidationError("汇总车型名称和状态由共享规则维护，当前行仅维护计划数量。")
             overrides = json.loads(row["overrides_json"])
             active, end_month = prior["active"], prior.get("end_month")
             fields = [field for field in ("brand", "model", "version", "active") if field in change]
@@ -911,7 +976,7 @@ class SOPStore:
                         original = catalog_model_input(original, prior)
                         requested = catalog_model_input(requested, prior)
                         database = catalog_model_input(database, prior)
-                        if is_model_plan(prior) and not re.search(r"20\d{2}款", requested):
+                        if is_model_plan(prior) and not prior.get("summary_generation") and not re.search(r"20\d{2}款", requested):
                             raise ValidationError("车型总量请保留车型年款，例如 M5 2026款。")
                     if not original or not requested:
                         raise ValidationError(f"请完整填写{label}；减少版本请删除整条明细行。")
@@ -1004,7 +1069,13 @@ class SOPStore:
                             raise ValidationError("车型计划请填写带年款的车型，例如 M5 2026款。")
                         labels["plan_level"] = "model"
                     name_key = catalog_name_key(labels)
-                    matches = names.get(name_key, [])
+                    candidates = names.get(name_key, [])
+                    requested_parent = entry.get("parent_generation")
+                    actual_parent = generation_parent(labels, self._generation_rules())
+                    if requested_parent is not None and requested_parent != actual_parent:
+                        raise ValidationError("新增单代际不属于所选汇总车型，请核对共享规则和年款。")
+                    singles = [p for p in candidates if not p.get("summary_generation")]
+                    matches = singles if singles or requested_parent is not None else candidates
                     if len(matches) > 1:
                         raise ValidationError("相同品牌、车型和版本对应多个来源代际，请在已有明细行填写，不能自动合并。")
                     entry_plans = []
@@ -1178,6 +1249,41 @@ class SOPStore:
                 records.append(item)
             return {"items": records}
 
+    @staticmethod
+    def _freeze_summary_plans(payload, groups):
+        """Freeze effective parent values from the same cutoff, retaining raw input."""
+        if not groups:
+            return
+        products = payload.get("products", [])
+        plans = {(row["product_id"], row["month"]): row for row in payload.get("plans", [])}
+        rules = {"groups": groups}
+        detail, _ = project_generation_sources({"products": [p for p in products if not p.get("summary_generation")]}, "detail", rules)
+        for parent in products:
+            name = parent.get("summary_generation")
+            if not name or name not in groups:
+                continue
+            members = [p for p in detail["products"] if generation_parent(p, rules) == name]
+            member_ids = {p["id"] for p in members}
+            parent["summary_member_product_ids"] = sorted(member_ids)
+            parent["identity_read_only"] = True
+            months = {month for pid, month in plans if pid in member_ids | {parent["id"]}}
+            for month in months:
+                key = parent["id"], month
+                row = dict(plans.get(key, {"product_id": parent["id"], "month": month, "forecast": None, "revision": 0}))
+                raw = row.get("sop")
+                automatic = plan_total(members, month, plans)
+                chosen = effective_products(members, month, plans)
+                known = sum(plans.get((p["id"], month), {}).get("sop") is not None for p in chosen)
+                present = {normalize_generation(g) for p in members for g in source_generations(p)}
+                # Manual model totals explicitly name their generation in model labels.
+                present.update(normalize_generation(p["brand"] + " " + p["model"]) for p in members if not source_generations(p))
+                missing = any(normalize_generation(g) not in present for g in groups[name])
+                row.update(input_sop=raw, auto_sop=automatic, sop=raw if raw is not None else automatic,
+                           derived=raw is None, partial=raw is None and (known < len(chosen) or missing),
+                           auto_known_members=known, auto_total_members=len(chosen))
+                plans[key] = row
+        payload["plans"] = list(plans.values())
+
     def _snapshot(self, cutoff, business_date, kind, label, auto_key=None, inclusive=False):
         cutoff_text = stamp(cutoff)
         operator = "<=" if inclusive else "<"
@@ -1199,6 +1305,11 @@ class SOPStore:
         settings = json.loads(settings_row["payload"]) if settings_row else {"bridge_m6": True, "zero_week_anchor": "month_week_majority"}
         snap_month = business_date.strftime("%Y-%m")
         payload.update({"plans": list(state["plan"].values()), "shipments": list(state["shipment"].values()), "settings": settings})
+        rule_version = self.db.execute(f"SELECT signature,payload FROM generation_rules_versions WHERE recorded_at {operator} ? ORDER BY recorded_at DESC,id DESC LIMIT 1", (cutoff_text,)).fetchone()
+        if rule_version:
+            frozen_groups = json.loads(rule_version["payload"])
+            self._freeze_summary_plans(payload, frozen_groups)
+            payload["generation_rules"] = {"signature": rule_version["signature"], "groups": frozen_groups}
         payload["meta"] = {**payload.get("meta", {}), "snapshot_cutoff_at": cutoff_text,
                            "history_event_id": rows[-1]["id"] if rows else None,
                            "sales_version_id": sales["id"] if sales else None,
@@ -1288,12 +1399,21 @@ class SOPStore:
             self.ensure_daily_snapshots()
             sales = self.read_sales()
             existing_ids = {row["product_id"] for row in self.db.execute("SELECT product_id FROM plans WHERE month=? AND (forecast IS NOT NULL OR sop IS NOT NULL) UNION SELECT product_id FROM shipments WHERE month=?", (month, month))}
-            products = [p for p in sales["products"] if (not brand or p.get("brand") == brand)
+            selection = sales["products"]
+            member_products = sales.get("generation_members", {}).get("products", [])
+            if product_id and any(p["id"] == product_id for p in member_products):
+                selection = member_products
+            elif model and not any(p.get("model") == model for p in selection):
+                selection = member_products
+            products = [p for p in selection if (not brand or p.get("brand") == brand)
                         and (not model or p.get("model") == model) and (not product_id or p["id"] == product_id)
                         and (p["id"] in existing_ids or ((not p.get("start_month") or month >= p["start_month"])
                              and (not p.get("end_month") or month <= p["end_month"])))]
-            product_ids = {pid for p in products for pid in p.get("model_member_product_ids", p.get("member_product_ids", [p["id"]]))}
-            incomplete_groups = any(p.get("missing_member_generations") for p in products)
+            product_ids = {pid for p in products for pid in ([p["id"], *p["summary_member_product_ids"]] if "summary_member_product_ids" in p else p.get("model_member_product_ids", p.get("member_product_ids", [p["id"]])))}
+            missing_groups = {p.get("summary_generation") for p in products if p.get("missing_member_generations")}
+            def incomplete_groups(chosen):
+                covered = {p.get("summary_generation") for p in chosen if is_model_plan(p) and not p.get("read_only")}
+                return bool(missing_groups - covered)
             if not products:
                 raise ValidationError("没有符合筛选条件的产品。")
             configured = zero_week_date or self.settings().get("zero_week_anchor", "month_week_majority")
@@ -1304,7 +1424,8 @@ class SOPStore:
             else:
                 zero = self._validate_sunday(configured)
             shipment_rows = [dict(r) for r in self.db.execute("SELECT * FROM shipments WHERE month=?", (month,)) if r["product_id"] in product_ids]
-            raw_products = [p for p in self._catalog_items() if p["id"] in product_ids]
+            scoped_catalog = {p["id"]: p for p in sales["products"] + member_products if not p.get("read_only")}
+            raw_products = [scoped_catalog.get(p["id"], p) for p in self._catalog_items() if p["id"] in product_ids]
             shipment_index = {}
             for row in shipment_rows:
                 item = shipment_index.setdefault((row["product_id"], month), {"sop": 0})
@@ -1312,7 +1433,7 @@ class SOPStore:
             actual_products = effective_products(raw_products, month, shipment_index)
             actual_ids = {p["id"] for p in actual_products}
             covered = {r["product_id"] for r in shipment_rows}
-            actual = plan_total(actual_products, month, shipment_index) if actual_products and all(p["id"] in covered for p in actual_products) and not incomplete_groups else None
+            actual = plan_total(actual_products, month, shipment_index) if actual_products and all(p["id"] in covered for p in actual_products) and not incomplete_groups(actual_products) else None
             current_month = self.clock().astimezone(TZ).strftime("%Y-%m")
             actual_status = "missing" if actual is None else "pending" if any(r["status"] == "pending" for r in shipment_rows if r["product_id"] in actual_ids) else "in_progress" if month >= current_month else "settled"
             rows = []
@@ -1325,9 +1446,11 @@ class SOPStore:
                     frozen = json.loads(snap["payload"])
                     plan_index = {(r["product_id"], r["month"]): r for r in frozen["plans"]}
                     historical = {p["id"]: p for p in frozen.get("products", [])}
-                    scope = [historical.get(p["id"], p) for p in raw_products]
+                    scope = [{**historical.get(p["id"], p),
+                              **({"summary_member_product_ids": p["summary_member_product_ids"]} if "summary_member_product_ids" in p else {})}
+                             for p in raw_products]
                     required = effective_products(scope, month, plan_index)
-                    if required and all(plan_index.get((p["id"], month), {}).get("sop") is not None for p in required) and not incomplete_groups:
+                    if required and all(plan_index.get((p["id"], month), {}).get("sop") is not None and not plan_index.get((p["id"], month), {}).get("partial") for p in required) and not incomplete_groups(required):
                         plan = plan_total(required, month, plan_index)
                 match = None
                 if not snap:

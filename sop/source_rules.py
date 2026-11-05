@@ -317,3 +317,59 @@ def project_generation_sources(data, mode, rules, known_summaries=()):
             result[field] = {**result[field], "sales": [row for row in result[field].get("sales", [])
                                                        if row.get("product_id") not in owners]}
     return result, warnings
+
+
+def project_generation_hierarchy(data, rules, known_summaries=()):
+    """Keep one summary layer and expose its single-generation members separately."""
+    from .plan_scope import is_model_plan
+    parents = {p["summary_generation"]: p for p in data.get("products", [])
+               if p.get("summary_generation") in rules["groups"] and not p.get("read_only")}
+    base = {**data, "products": [p for p in data.get("products", []) if not p.get("summary_generation")]}
+    detail, _ = project_generation_sources(base, "detail", rules, known_summaries)
+    result, warnings = project_generation_sources(base, "summary", rules, known_summaries)
+    owners = {normalize_generation(member): name for name, members in rules["groups"].items() for member in members}
+    grouped = {name: [] for name in rules["groups"]}
+    members = []
+    for product in detail.get("products", []):
+        matches = _group_candidates(product, owners)
+        if len(matches) > 1:
+            raise MergeRuleError("一个版本不能同时属于多个汇总代际。")
+        if matches:
+            name = next(iter(matches))
+            item = {**product, "parent_generation": name}
+            grouped[name].append(item)
+            members.append(item)
+    result["products"] = [p for p in result.get("products", []) if not (p.get("read_only") and is_model_plan(p))]
+    groups = []
+    for name, configured_members in rules["groups"].items():
+        if name not in parents:
+            continue
+        parent = dict(parents[name])
+        ids = [p["id"] for p in grouped[name]]
+        present = {generation for product in grouped[name] for generation in _declared_generations(product)}
+        missing = [generation for generation in configured_members if normalize_generation(generation) not in present]
+        parent.update(summary_member_product_ids=ids, member_generations=list(configured_members),
+                      missing_member_generations=missing, identity_read_only=True, read_only=False)
+        result["products"].append(parent)
+        groups.append({"summary_generation": name, "parent_product_id": parent["id"],
+                       "member_product_ids": ids, "brand": parent["brand"], "model": parent["model"]})
+    member_ids = {p["id"] for p in members}
+    model_rows = []
+    for row in detail.get("model_sales", []):
+        matches = _group_candidates(row, owners)
+        if len(matches) == 1:
+            model_rows.append({**row, "parent_generation": next(iter(matches))})
+    result["generation_members"] = {"products": members,
+        "sales": [row for row in detail.get("sales", []) if row.get("product_id") in member_ids],
+        "model_sales": model_rows, "groups": groups}
+    # A configured parent can be maintained before any member is planned/launched.
+    # Missing lock references remain explicit on their rows; no plan warning is needed.
+    return result, [warning for warning in warnings if "缺少单代际目录" not in warning]
+
+
+def generation_parent(product, rules):
+    owners = {normalize_generation(member): name for name, members in rules["groups"].items() for member in members}
+    matches = _group_candidates(product, owners)
+    if len(matches) > 1:
+        raise MergeRuleError("一个版本不能同时属于多个汇总代际。")
+    return next(iter(matches), None)

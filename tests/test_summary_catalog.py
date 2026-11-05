@@ -1,5 +1,6 @@
 """Hide source summary generations without losing old workbook identities."""
 import json
+from contextlib import contextmanager
 import tempfile
 import unittest
 from datetime import datetime
@@ -28,8 +29,13 @@ PLANS = [{"product_id": p["id"], "month": "2026-10", "sop": (i+1)*10, "revision"
 LOOKUP = {(p["product_id"], p["month"]): p for p in PLANS}
 
 
+@contextmanager
 def previous_view():
-    return patch("sop.store.project_generation_sources", lambda data, *args, **kwargs: (data, []))
+    # Seed a genuine pre-hierarchy workbook/catalog, including old raw summaries.
+    with patch("sop.store.project_generation_sources", lambda data, *args, **kwargs: (data, [])), \
+         patch("sop.store.project_generation_hierarchy", lambda data, *args, **kwargs: (data, [])), \
+         patch.object(SOPStore, "_ensure_summary_parents", lambda self, rules: None):
+        yield
 
 
 class SummaryCatalogTest(unittest.TestCase):
@@ -54,12 +60,13 @@ class SummaryCatalogTest(unittest.TestCase):
         with previous_view():
             self.store = SOPStore(self.root / "test.sqlite3", self.source,
                                   lambda: datetime(2026, 10, 28, 12, tzinfo=TZ))
+            self.addCleanup(self.store.close)
+            self.store.update_settings({"generation_mode": "detail"})
             self.store.save_plans({"owner": "test", "changes": [
                 {**plan, "forecast": None, "revision": 0} for plan in PLANS]})
             self.store.save_shipments({"owner": "test", "changes": [
                 {"product_id": p["id"], "month": "2026-10", "quantity": i+1, "status": "settled",
                  "source": "SP", "batch": "", "revision": 0} for i, p in enumerate(PRODUCTS)]})
-        self.addCleanup(self.store.close)
 
     def quantity(self, pid):
         return self.store.db.execute("SELECT sop FROM plans WHERE product_id=? AND month='2026-10'", (pid,)).fetchone()[0]
@@ -75,7 +82,7 @@ class SummaryCatalogTest(unittest.TestCase):
         self.assertEqual(self.store.matching("2026-10")["product_count"], 3)
         self.assertEqual(self.quantity("summary"), 30)
         self.assertEqual(self.store.db.execute("SELECT active FROM product_catalog WHERE id='summary'").fetchone()[0], 1)
-        self.assertEqual(len(self.store.read_sales(include_excluded=True)["products"]), 4)
+        self.assertEqual(len([p for p in self.store.read_sales(include_excluded=True)["products"] if not p.get("summary_generation")]), 4)
         self.assertEqual(self.source.read_bytes(), before_source)
         raw_version = json.loads(self.store.db.execute("SELECT payload FROM sales_versions ORDER BY id DESC LIMIT 1").fetchone()[0])
         self.assertIn("summary", {p["id"] for p in raw_version["products"]})
@@ -128,7 +135,7 @@ class SummaryCatalogTest(unittest.TestCase):
         self.assertEqual(sum(row["value"] for row in visible["sales"]), 300)
         self.assertEqual(sum(row["value"] for row in visible["model_sales"]), 300)
         self.assertEqual(self.quantity("a"), 10)
-        self.assertEqual(len(self.store.read_sales(include_excluded=True)["products"]), 4)
+        self.assertEqual(len([p for p in self.store.read_sales(include_excluded=True)["products"] if not p.get("summary_generation")]), 4)
         self.assertTrue(self.store.manual_snapshot("mixed-source-check")["ok"])
 
     def test_old_maintenance_imports_saved_edits_then_removes_summary_rows(self):

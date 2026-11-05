@@ -418,6 +418,11 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                 elif path == "/api/shipments":
                     result = store.save_shipments(body)
                 elif path == "/api/settings":
+                    if body.get("generation_mode") == "detail":
+                        # An old browser tab must not switch every new client
+                        # back to the retired flat presentation.
+                        self._json({"error": "车型已统一按汇总代际展示，请刷新页面并使用车型行的展开功能。"}, 409)
+                        return
                     if "generation_mode" in body and workbook_sync:
                         started = time.monotonic()
                         target_mode = body["generation_mode"] if body["generation_mode"] in ("detail", "summary") else "invalid"

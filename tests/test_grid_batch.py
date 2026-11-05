@@ -120,23 +120,27 @@ class GridBatchTest(unittest.TestCase):
 
     def test_readonly_hidden_ids_and_stale_rules_cannot_be_saved(self):
         stale = self.body(changes=[self.edit()])
-        self.store.update_settings({"generation_mode": "summary"})
+        self.store.update_settings({"generation_mode": "detail"})
         with self.assertRaisesRegex(ValidationError, "代际范围"): self.store.save_grid_batch(stale)
+        self.store.update_settings({"generation_mode": "summary"})
         virtual = next(p for p in self.store.state()["products"] if p.get("read_only"))
-        for pid in ("a", virtual["id"]):
-            with self.subTest(pid=pid), self.assertRaises(ValidationError):
-                self.store.save_grid_batch(self.body(changes=[{"product_id": pid, "month": "2026-10", "sop": 1, "revision": 0}]))
+        with self.assertRaisesRegex(ValidationError, "只读"):
+            self.store.save_grid_batch(self.body(changes=[{"product_id": virtual["id"], "month": "2026-10", "sop": 1, "revision": 0}]))
+        self.assertEqual(self.store.save_grid_batch(self.body(changes=[self.edit(sop=12)]))["saved_count"], 1)
+        self.assertEqual(self.plan("a")["sop"], 12)
         request = self.body(changes=[self.edit(pid="c")])
         self.config.write_text("MERGE_GROUPS = {}\n", encoding="utf-8")
         with self.assertRaisesRegex(ValidationError, "共享规则"): self.store.save_grid_batch(request)
 
-    def test_new_entries_cannot_duplicate_rows_or_enter_a_hidden_readonly_group(self):
+    def test_new_entries_reject_duplicates_and_allow_expanded_single_generations(self):
         request = self.body(entries=[{**self.entry(), "model": "A 2026款", "version": "Max"}])
         with self.assertRaisesRegex(ValidationError, "已存在"): self.store.save_grid_batch(request)
         with self.assertRaises(ValidationError): self.store.save_grid_batch(self.body(entries=[self.entry(), self.entry()]))
         self.store.update_settings({"generation_mode": "summary"})
-        with self.assertRaisesRegex(ValidationError, "切换至单代际"):
-            self.store.save_grid_batch(self.body(entries=[{**self.entry(), "model": "A 2026款"}]))
+        added = self.store.save_grid_batch(self.body(entries=[{**self.entry(), "model": "A 2026款",
+            "parent_generation": "智界 Together 2026款汇总"}]))
+        self.assertEqual(added["created_count"], 1)
+        self.assertIn(added["entry_ids"]["new"], {p["id"] for p in self.store.state()["generation_members"]["products"]})
         result = self.store.save_grid_batch(self.body(entries=[self.entry()]))
         self.assertEqual(result["created_count"], 1)
 

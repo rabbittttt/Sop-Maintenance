@@ -9,8 +9,9 @@ from unittest.mock import patch
 import openpyxl
 
 from sop.store import SOPStore, TZ, ValidationError
-from sop.workbook import WorkbookSync
+from sop.workbook import WorkbookSync, generation_model_groups
 from sop.roundtrip import PlanRoundtrip
+from sop.plan_scope import is_model_plan, plan_total
 from sop.xlsx_plan import write_plan_workbook
 from sop.xlsx_export import write_export_workbook
 from tests import test_inline_renderer as fixtures
@@ -43,6 +44,7 @@ class GenerationExcelTest(unittest.TestCase):
         self.store.update_settings({"generation_mode": "summary"})
         sales = self.store.read_sales()
         self.aggregate = next(p["id"] for p in sales["products"] if p.get("read_only"))
+        self.parent = next(p["id"] for p in sales["products"] if p.get("identity_read_only"))
         return sales
 
     def spec(self):
@@ -50,14 +52,25 @@ class GenerationExcelTest(unittest.TestCase):
 
     def download(self, name="export", writer=write_export_workbook):
         sales = self.store.read_sales()
-        plans = self.store.view_plans(sales)
-        lookup = {(p["product_id"], p["month"]): p for p in plans}
-        with patch.multiple(fixtures, PRODUCTS=sales["products"], PLANS=plans, LOOKUP=lookup):
-            body = fixtures.export_payload(months=["2026-10"], locks=True)
-        body["selected_product_ids"] = [p["id"] for p in sales["products"]]
-        body["row_product_ids"] = body.pop("roundtrip")["row_product_ids"]
-        body["generation_rule_signature"] = sales["generation_view"]["rule_signature"]
-        body["generation_mode"] = sales["generation_view"]["mode"]
+        products = [p for p in sales["products"] if not p.get("read_only")] + sales.get("generation_members", {}).get("products", [])
+        rows, ids, parents = [], [], []
+        for (brand, model, parent), members in generation_model_groups(products)[0]:
+            for metric in ("锁单数", "SOP计划量"):
+                rows.append(["车型汇总", brand, model, "", metric, None, ""])
+                ids.append(None); parents.append(parent)
+                for product in members:
+                    if metric == "锁单数" and is_model_plan(product):
+                        continue
+                    rows.append(["版本明细", brand, model, product["version"], metric, None, ""])
+                    ids.append(product["id"]); parents.append(parent)
+        body = {"schema_version": 1, "current_month": "2026-10", "months": ["2026-10"],
+                "include_versions": True, "include_locks": True, "scope": "all",
+                "headers": ["层级", "品牌", "车型", "版本", "指标", "2026-10", "数据说明"],
+                "rows": rows, "row_product_ids": ids, "row_parent_generations": parents,
+                "selected_product_ids": [p["id"] for p in products],
+                "annual_plans": [{} for _ in rows],
+                "generation_rule_signature": sales["generation_view"]["rule_signature"],
+                "generation_mode": sales["generation_view"]["mode"]}
         service = PlanRoundtrip(self.store)
         clean, context = service.prepare(body)
         path = self.root / (name + ".xlsx")
@@ -96,7 +109,8 @@ class GenerationExcelTest(unittest.TestCase):
         self.assertEqual(self.sync.sync()["status"], "synced")
         spec = self.spec()
         by_id = {p["id"]: p for p in spec["products"]}
-        self.assertEqual(set(by_id), {"s9", "s9-new", "s9-beta", "s9t", self.manual_id, self.dated_manual_id})
+        self.assertEqual(set(by_id), {"s9", "s9-new", "s9-beta", "s9t", self.manual_id, self.dated_manual_id,
+                                     next(p["id"] for p in self.store.read_sales()["products"] if p.get("identity_read_only"))})
         self.assertEqual(by_id["s9"]["source_generation"], "享界 S9 2024款")
         self.assertEqual(by_id["s9"]["model"], "S9 2024款")
         self.assertEqual(by_id["s9-new"]["model"], "S9 2026款")
@@ -155,17 +169,17 @@ class GenerationExcelTest(unittest.TestCase):
         aggregate_ids = {p["id"] for p in summary["products"] if p.get("read_only")}
         self.assertEqual({pid for p in summary["products"] if p.get("read_only") for pid in p["member_product_ids"]},
                          {"s9-new", "s9-beta", "s9t", self.dated_manual_id})
-        self.assertEqual({p["id"] for p in summary["products"] if not p.get("read_only")}, {"s9", self.manual_id})
+        self.assertEqual({p["id"] for p in summary["products"] if not p.get("read_only")}, {"s9", self.manual_id, self.parent})
         self.assertEqual(sum(p["sop"] for p in summary["plans"] if p["product_id"] in aggregate_ids), 29)
-        self.assertEqual(sum(p["sop"] for p in summary["plans"]), 45)
+        self.assertEqual(plan_total(summary["products"], "2026-10", {(r["product_id"], r["month"]): r for r in summary["plans"]}), 45)
         self.assertEqual(self.sync.sync()["status"], "synced")
-        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"X4 2026款", "S9 2024款", "S9"})
+        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"X4 2026款", "S9 2024款", "S9", "S9 2026款", "S9T 2026款"})
         service, path, _ = self.download("beta-summary")
         book = openpyxl.load_workbook(path)
         spec = fixtures.manifest(book)
-        self.assertEqual({p["model"] for p in spec["products"]}, {"X4 2026款", "S9 2024款", "S9"})
+        self.assertEqual({p["model"] for p in spec["products"]}, {"X4 2026款", "S9 2024款", "S9", "S9 2026款", "S9T 2026款"})
         plan_rows = [r for r in spec["rows"] if r["kind"] == "product" and r.get("metric") == "SOP计划量"]
-        self.assertEqual(sum(book["SOP计划"].cell(r["row"], 4).value for r in plan_rows), 45)
+        self.assertEqual(sum(book["SOP计划"].cell(r["row"], 4).value or 0 for r in plan_rows), 45)
         for row in plan_rows:
             self.assertEqual(book["SOP计划"].cell(row["row"], 4).protection.locked,
                              row["product_id"] in aggregate_ids)
@@ -179,7 +193,8 @@ class GenerationExcelTest(unittest.TestCase):
         self.assertEqual(result["imported"], 3)
         self.assertEqual(result["created"], 0)
         self.assertEqual(result["catalog_updated"], 0)
-        self.assertEqual(sum(p["sop"] for p in self.store.view_plans()), 53)
+        current = self.store.read_sales()
+        self.assertEqual(plan_total(current["products"], "2026-10", {(r["product_id"], r["month"]): r for r in self.store.view_plans(current)}), 53)
         self.assertEqual(sum(p["sop"] for p in self.store.view_plans() if p["product_id"] in aggregate_ids), 34)
         original = next(p for p in self.store.read_sales(include_excluded=True)["products"] if p["id"] == "s9")
         self.assertEqual(original["source_generation"], "享界 S9 2024款")
@@ -187,7 +202,7 @@ class GenerationExcelTest(unittest.TestCase):
         self.assertEqual(self.sync.sync()["status"], "synced")
         spec = self.spec()
         book = openpyxl.load_workbook(self.path, data_only=True)
-        self.assertEqual(sum(book["SOP计划"].cell(r["row"], 13).value
+        self.assertEqual(sum(book["SOP计划"].cell(r["row"], 13).value or 0
                              for r in spec["rows"] if r["kind"] == "product"), 53)
         book.close()
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 6)
@@ -201,11 +216,13 @@ class GenerationExcelTest(unittest.TestCase):
         self.summary()
         self.assertEqual(self.sync.sync()["status"], "synced")
         spec = self.spec()
-        row = next(r["row"] for r in spec["rows"] if r.get("product_id") == self.aggregate)
-        self.assertEqual(spec["editable_months_by_product"][self.aggregate], [])
+        row = next(r["row"] for r in spec["rows"] if r.get("product_id") == self.parent)
+        self.assertIn("2026-10", spec["editable_months_by_product"][self.parent])
         book = openpyxl.load_workbook(self.path, data_only=True)
-        self.assertEqual(book["SOP计划"][f"M{row}"].value, 31)
-        self.assertTrue(book["SOP计划"][f"M{row}"].protection.locked)
+        self.assertIsNone(book["SOP计划"][f"M{row}"].value)
+        total_row = next(r["row"] for r in spec["rows"] if r.get("label_b") == "Combo 2026款 合计")
+        self.assertEqual(book["SOP计划"][f"M{total_row}"].value, 31)
+        self.assertFalse(book["SOP计划"][f"M{row}"].protection.locked)
         self.assertTrue(book["SOP计划"][f"C{row}"].protection.locked)
         book.close()
         self.store.update_settings({"generation_mode": "detail"})
@@ -214,19 +231,21 @@ class GenerationExcelTest(unittest.TestCase):
         self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='a'").fetchone()[0], 11)
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans WHERE product_id LIKE 'group_%'").fetchone()[0], 0)
 
-    def test_export_derives_values_and_rejects_projection_changes(self):
+    def test_export_accepts_parent_plan_and_rejects_rule_owned_identity_changes(self):
         self.summary()
         service, path, _ = self.download()
         original = path.read_bytes()
         book = openpyxl.load_workbook(path)
         spec = fixtures.manifest(book)
-        row = next(r["row"] for r in spec["rows"] if r.get("product_id") == self.aggregate and r.get("metric") == "SOP计划量")
+        row = next(r["row"] for r in spec["rows"] if r.get("product_id") == self.parent and r.get("metric") == "SOP计划量")
         plain = next(r["row"] for r in spec["rows"] if r.get("product_id") == "c" and r.get("metric") == "SOP计划量")
-        self.assertEqual(book["SOP计划"][f"D{row}"].value, 30)
-        self.assertTrue(book["SOP计划"][f"D{row}"].protection.locked)
+        self.assertIsNone(book["SOP计划"][f"D{row}"].value)
+        self.assertFalse(book["SOP计划"][f"D{row}"].protection.locked)
         self.assertTrue(book["SOP计划"][f"C{row}"].protection.locked)
         book.close()
-        for field, value in [("D", 999), ("C", "Changed")]:
+        edit_cell(path, f"D{row}", 999)
+        self.assertEqual(service.import_content(path.read_bytes())["imported"], 1)
+        for field, value in [("C", "Changed")]:
             with self.subTest(field=field):
                 path.write_bytes(original)
                 edit_cell(path, f"{field}{row}", value)
@@ -262,19 +281,19 @@ class GenerationExcelTest(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "规则或展示模式已变化"):
             PlanRoundtrip(self.store).prepare(body)
         self.assertEqual(self.sync.sync()["status"], "synced")
-        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"Combo 2026款", "B 2026款", "C 2026款"})
+        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"Combo 2026款", "A 2025款", "B 2026款", "C 2026款"})
 
     @unittest.skipUnless(fixtures.NODE_AVAILABLE, "Bundled spreadsheet runtime unavailable")
-    def test_node_writer_keeps_aggregate_cells_readonly_and_roundtrippable(self):
+    def test_node_writer_keeps_parent_inputs_editable_and_identity_readonly(self):
         self.summary()
         payload, _ = self.sync._context()
         with patch.object(fixtures, "OUT", self.root):
             maintenance = fixtures.generate("build_plan_workbook.mjs",
                 {**payload, "token": "node-maintenance", "generated_at": "2026-10-28T12:00:00+08:00"}, "node-maintenance")
-        row = next(r["row"] for r in payload["layout"]["sheets"][0]["rows"] if r.get("product_id") == self.aggregate)
+        row = next(r["row"] for r in payload["layout"]["sheets"][0]["rows"] if r.get("product_id") == self.parent)
         book = openpyxl.load_workbook(maintenance)
-        self.assertEqual(book["SOP计划"][f"M{row}"].value, 30)
-        self.assertTrue(book["SOP计划"][f"M{row}"].protection.locked)
+        self.assertIsNone(book["SOP计划"][f"M{row}"].value)
+        self.assertFalse(book["SOP计划"][f"M{row}"].protection.locked)
         self.assertTrue(book["SOP计划"][f"C{row}"].protection.locked)
         book.close()
         def writer(payload):
@@ -282,8 +301,8 @@ class GenerationExcelTest(unittest.TestCase):
                 fixtures.generate("build_export_workbook.mjs", payload, "node-export")
         service, path, _ = self.download("node-export", writer)
         book = openpyxl.load_workbook(path)
-        row = next(r["row"] for r in fixtures.manifest(book)["rows"] if r.get("product_id") == self.aggregate and r.get("metric") == "SOP计划量")
-        self.assertEqual(book["SOP计划"][f"D{row}"].value, 30)
+        row = next(r["row"] for r in fixtures.manifest(book)["rows"] if r.get("product_id") == self.parent and r.get("metric") == "SOP计划量")
+        self.assertIsNone(book["SOP计划"][f"D{row}"].value)
         self.assertTrue(book["SOP计划"][f"C{row}"].protection.locked)
         book.close()
         self.assertEqual(service.import_content(path.read_bytes())["imported"], 0)

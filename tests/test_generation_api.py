@@ -27,6 +27,8 @@ class GenerationAPITest(unittest.TestCase):
         source.write_text(json.dumps({"meta": {}, "products": [], "sales": []}), encoding="utf-8")
         self.store = SOPStore(self.root / "test.sqlite3", source, lambda: datetime(2026, 10, 28, 12, tzinfo=TZ))
         self.addCleanup(self.store.close)
+        # These compatibility tests explicitly exercise the former detail setting.
+        self.store.update_settings({"generation_mode": "detail"})
         self.sync = SheetSync()
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
         self.http.RequestHandlerClass = make_handler(self.store, self.root, self.http.server_port, self.sync)
@@ -65,6 +67,14 @@ class GenerationAPITest(unittest.TestCase):
         code, result = self.request("/api/settings", {"generation_mode": "summary"})
         self.assertEqual(code, 409, result)
         self.assertEqual(self.store.settings().get("generation_mode", "detail"), "detail")
+
+    def test_legacy_browser_cannot_switch_the_shared_view_back_to_detail(self):
+        self.store.update_settings({"generation_mode": "summary"})
+        code, result = self.request("/api/settings", {"generation_mode": "detail"})
+        self.assertEqual(code, 409, result)
+        self.assertIn("统一", result["error"])
+        self.assertEqual(self.store.settings()["generation_mode"], "summary")
+        self.assertEqual(self.sync.calls, 0)
 
     def test_poll_reloads_rule_change_and_exposes_invalid_config(self):
         path = "/api/plan-workbook/status"

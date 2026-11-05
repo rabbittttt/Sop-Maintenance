@@ -17,6 +17,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from .brand import brand_order_key
 from .plan_scope import MODEL_PLAN_LABEL
+from .workbook import generation_model_groups
 from .xlsx_style import PLAN_TITLE, plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
@@ -98,6 +99,9 @@ def _layout(data):
 
     metric_index = 4 if data["include_versions"] else 3
     source_rows = []
+    parent_scopes = data.get("row_parent_generations", data.get("roundtrip", {}).get("row_parent_generations"))
+    if parent_scopes is not None and len(parent_scopes) != len(data["rows"]):
+        raise ValueError("代际层级行标识数量不一致。")
     ids = data.get("roundtrip", {}).get("row_product_ids")
     counts = data.get("roundtrip", {}).get("annual_known_counts")
     if ids is not None and len(ids) != len(data["rows"]):
@@ -110,10 +114,15 @@ def _layout(data):
             "annual": data["annual_plans"][index],
             "product_id": ids[index] if ids is not None else None,
             "annual_known": counts[index] if counts is not None else None,
+            "parent_generation": parent_scopes[index] if parent_scopes is not None else None,
         })
     groups = OrderedDict()
     for source in source_rows:
-        groups.setdefault(source["brand"], OrderedDict()).setdefault(source["model"], []).append(source)
+        groups.setdefault(source["brand"], OrderedDict()).setdefault((source["model"], source["parent_generation"]), []).append(source)
+    catalog_products = data.get("roundtrip", {}).get("products", [])
+    ordered_models, hierarchy_parents = generation_model_groups(catalog_products)
+    model_order = {(brand, model, parent): index for index, ((brand, model, parent), _) in enumerate(ordered_models)}
+    summary_totals, child_totals = {}, {}
     fields = ["锁单数", "SOP计划量"] if data["include_locks"] else ["SOP计划量"]
     rows, next_row = [], 5
 
@@ -209,8 +218,10 @@ def _layout(data):
     for brand, models in sorted(groups.items(), key=lambda item: brand_order_key(item[0])):
         brand_first = next_row
         model_totals = {field: [] for field in fields}
-        for model, group in models.items():
+        for (model, parent_generation), group in sorted(models.items(), key=lambda item: model_order.get((brand, *item[0]), len(model_order))):
             model_first = next_row
+            is_member = parent_generation in hierarchy_parents
+            summary = next((name for name, key in hierarchy_parents.items() if key == (brand, model, parent_generation)), None)
             summaries = {field: [r for r in group if r["level"] == "车型汇总" and r["metric"] == field] for field in fields}
             details = {field: [r for r in group if r["level"] == "版本明细" and r["metric"] == field] for field in fields}
             if any(len(value) != 1 for value in summaries.values()):
@@ -244,9 +255,20 @@ def _layout(data):
                 row = add_source(summaries[field][0], "model_total")
                 row["labels"][1] = model + (" 锁单" if field == "锁单数" else "") + " 合计"
                 if data["include_versions"] and field == "SOP计划量":
-                    sum_into(row, detail_rows[field])
+                    if summary:
+                        summary_totals[summary] = (row, detail_rows[field])
+                    else:
+                        sum_into(row, detail_rows[field])
                 merge_total(row)
-                model_totals[field].append(row)
+                if is_member:
+                    child_totals.setdefault((parent_generation, field), []).append(row)
+                else:
+                    model_totals[field].append(row)
+            for row in rows:
+                if row["row"] >= model_first:
+                    row["parent_generation"] = parent_generation
+                    row["outline_level"] = int(is_member)
+                    row["hierarchy_hidden"] = is_member
         for field in fields:
             row = total_row(field, model_totals[field], "brand_total", brand + (" 锁单" if field == "锁单数" else "") + " 合计")
             merge_total(row)
@@ -259,6 +281,33 @@ def _layout(data):
     for field in fields:
         row = total_row(field, brand_totals[field], "grand_total", "锁单总计" if field == "锁单数" else "总计")
         merge_total(row, grand=True)
+    for summary, (row, inputs) in summary_totals.items():
+        children = child_totals.get((summary, "SOP计划量"), [])
+        direct_inputs = [item for item in inputs if item.get("version") == MODEL_PLAN_LABEL]
+        for item in columns:
+            column, letter = item["column"], _column(item["column"])
+            if item["kind"] == "month":
+                known = [item for item in direct_inputs if item["values"][column] is not None]
+                automatic = data.get("roundtrip", {}).get("automatic_plan_values_by_product", {})
+                month = item["month"]
+                auto = _sum_known(automatic.get(child["product_id"], {}).get(month) for child in direct_inputs)
+                expected = _sum_known(item["values"][column] for item in known) if known else (_sum_known(item["values"][column] for item in children) if children else auto)
+                if row["values"][column] != expected:
+                    raise ValueError("汇总父车型与有效单代际计划不一致。")
+                direct = ",".join(f"{letter}{item['row']}" for item in direct_inputs)
+                refs = ",".join(f"{letter}{item['row']}" for item in children)
+                fallback = f'IF(COUNT({refs})=0,"",SUM({refs}))' if refs else str(auto) if auto is not None else '""'
+                row["formulas"][column] = f'=IF(COUNT({direct})>0,SUM({direct}),{fallback})' if direct else "=" + fallback
+            else:
+                year = next(y for y in years if y["year"] == item["year"])
+                if not year["full"] and not data.get("roundtrip"):
+                    continue
+                selected = [row["values"][c["column"]] for c in columns if c["kind"] == "month" and c["month"].startswith(item["year"] + "-")]
+                known = [value for value in selected if value is not None]
+                off_count = 0 if year["full"] else row["annual_known"][item["year"]] - len(known)
+                off_sum = 0 if year["full"] else (row["values"][column] or 0) - sum(known)
+                ref = f"{_column(year['first_column'])}{row['row']}:{_column(column-1)}{row['row']}"
+                row["formulas"][column] = f'=IF(COUNT({ref})+{off_count}=0,"",SUM({ref})+{off_sum})'
     last_row = next_row - 1
     product_column = width + 1 if inline else None
     kind_column = width + 2 if inline else None
@@ -269,7 +318,7 @@ def _layout(data):
         catalog = {product["id"]: product for product in data["roundtrip"]["products"]}
         for row in rows:
             row["key"] = ("lock:" if row["metric"] == "锁单数" else "plan:") + row["product_id"] if row["kind"] == "product" else "row:" + str(row["row"])
-            row["hidden"] = row["kind"] == "product" and catalog[row["product_id"]].get("active") is False
+            row["hidden"] = row.get("hierarchy_hidden", False) or (row["kind"] == "product" and catalog[row["product_id"]].get("active") is False)
     return {"identity": identity, "first_value": first_value, "columns": columns, "headers": headers,
             "rows": rows, "merges": merges, "last_row": last_row, "width": width,
             "last_column": key_column or width, "product_column": product_column,
@@ -364,11 +413,14 @@ def write_export_workbook(payload: dict) -> None:
             _text(sheet.cell(number, layout["product_column"]), row["product_id"])
             _text(sheet.cell(number, layout["kind_column"]), row["kind"])
             _text(sheet.cell(number, layout["key_column"]), row["key"])
+            if row.get("outline_level"):
+                sheet.row_dimensions[number].outlineLevel = row["outline_level"]
+                sheet.cell(number, 2).alignment = Alignment(vertical="center", indent=row["outline_level"])
             if row["hidden"]:
                 sheet.row_dimensions[number].hidden = True
             if data["include_versions"] and row["kind"] == "product" and row["metric"] == "SOP计划量":
                 for column in range(1, 4):
-                    sheet.cell(number, column).protection = Protection(locked=bool(product and product.get("read_only")))
+                    sheet.cell(number, column).protection = Protection(locked=bool(product and (product.get("read_only") or product.get("identity_read_only"))))
     # An empty dataValidations container is invalid SpreadsheetML. Summary
     # downloads and versions with no editable months must omit it entirely.
     if validation.sqref:
@@ -376,6 +428,7 @@ def write_export_workbook(payload: dict) -> None:
     for reference in layout["merges"]:
         sheet.merge_cells(reference)
     sheet.freeze_panes = f"{_column(layout['first_value'])}5"
+    sheet.sheet_properties.outlinePr.summaryBelow = False
     if not (layout["inline"] and data["include_versions"]):
         sheet.protection.sheet = True
         sheet.protection.selectLockedCells = False

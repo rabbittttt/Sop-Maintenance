@@ -36,6 +36,8 @@ class GenerationModeTest(unittest.TestCase):
         self.store = SOPStore(self.root / "test.sqlite3", self.source,
                               lambda: datetime(2026, 10, 28, 12, tzinfo=TZ))
         self.addCleanup(self.store.close)
+        # Exercise the retained legacy detail API explicitly; new databases default to hierarchy.
+        self.store.update_settings({"generation_mode": "detail"})
         self.store.save_plans({"owner": "test", "changes": [
             {"product_id": "a", "month": "2026-10", "forecast": None, "sop": 0, "revision": 0},
             {"product_id": "b", "month": "2026-10", "forecast": None, "sop": 20, "revision": 0},
@@ -52,7 +54,9 @@ class GenerationModeTest(unittest.TestCase):
         summary = self.store.state()
         projected = next(p for p in summary["products"] if p.get("read_only"))
         self.assertEqual(projected["member_product_ids"], ["a", "b"])
-        self.assertEqual({p["id"] for p in summary["products"]}, {projected["id"], "other"})
+        parent = next(p for p in summary["products"] if p.get("summary_generation") and not p.get("read_only"))
+        self.assertEqual({p["id"] for p in summary["products"]}, {projected["id"], parent["id"], "other"})
+        self.assertFalse(parent["read_only"])
         self.assertEqual(sum(row["value"] for row in summary["model_sales"]), 305)
         self.assertEqual(sum(row["value"] for row in summary["sales"]), 273)
         self.assertEqual(next(row for row in summary["plans"] if row["product_id"] == projected["id"])["sop"], 20)

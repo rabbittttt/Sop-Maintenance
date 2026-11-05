@@ -31,7 +31,7 @@ const run=s=>vm.runInContext(s,context);
 context.originalAPI=run('api');
 context.initialState=structuredClone(base);
 run('state=initialState;api=requestAPI;toast=notify;indexData();planning()');
-assert.match(app.innerHTML,/id="generation-filter"[^]*?value="detail" selected[^]*?value="summary"/);
+assert.doesNotMatch(app.innerHTML,/id="generation-filter"/,'The unified dashboard must not expose a generation-mode selector.');
 assert.equal(run("exportScope({allProducts:true})"),'全部品牌 · 全部车型 · 单代际');
 
 // Mode changes serialize edits and only render the server's replacement scope.

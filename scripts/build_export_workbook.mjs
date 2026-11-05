@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { Workbook, SpreadsheetFile, FileBlob } from '@oai/artifact-tool';
 import { PYTHON } from './runtime.mjs';
@@ -207,7 +208,17 @@ function makeLayout(data, parsed) {
 async function main() {
   let input='';process.stdin.setEncoding('utf8');
   for await(const chunk of process.stdin)input+=chunk;
-  const data=JSON.parse(input.replace(/^\uFEFF/,'')),layout=makeLayout(data,validate(data));
+  const data=JSON.parse(input.replace(/^\uFEFF/,''));
+  if(data.roundtrip?.products?.some(p=>'summary_member_product_ids' in p)||data.row_parent_generations?.some(Boolean)) {
+    // One hierarchy renderer keeps Node-enabled and offline Excel files identical.
+    const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+    const written=spawnSync(PYTHON,['-X','utf8','-c','import json,sys; from sop.xlsx_export import write_export_workbook; write_export_workbook(json.load(sys.stdin))'],
+      {input:JSON.stringify(data),encoding:'utf8',cwd:root,windowsHide:true});
+    if(written.status!==0)throw new Error(written.stderr||'Hierarchy workbook generation failed');
+    process.stdout.write(JSON.stringify({ok:true,output_path:path.resolve(data.output_path)})+'\n');
+    return;
+  }
+  const layout=makeLayout(data,validate(data));
   const output=path.resolve(data.output_path),wb=Workbook.create(),sheet=wb.worksheets.add('SOP计划');
   const last=column(layout.width),firstValue=column(layout.firstValue),exactText={'SOP计划':[]},unlocked=[],mapping=[];
   function writeTo(target,row,col,values) {

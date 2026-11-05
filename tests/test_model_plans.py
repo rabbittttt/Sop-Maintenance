@@ -6,7 +6,7 @@ import openpyxl
 
 from sop.plan_scope import MODEL_PLAN_LABEL, is_model_plan, plan_total
 from sop.store import TZ, ValidationError
-from sop.workbook import WorkbookSync
+from sop.workbook import WorkbookSync, generation_model_groups
 from sop.xlsx_plan import write_plan_workbook
 from sop.xlsx_export import write_export_workbook
 from sop.roundtrip import PlanRoundtrip
@@ -52,8 +52,10 @@ class ModelPlansTest(unittest.TestCase):
         sales = self.store.read_sales()
         self.assertEqual(self.total(sales), 120)
         total = next(p for p in sales["products"] if is_model_plan(p))
-        self.assertTrue(total["read_only"])
-        self.assertEqual(next(r["sop"] for r in self.store.view_plans(sales) if r["product_id"] == total["id"]), 120)
+        self.assertFalse(total["read_only"])
+        row = next(r for r in self.store.view_plans(sales) if r["product_id"] == total["id"])
+        self.assertIsNone(row["sop"])
+        self.assertEqual(row["auto_sop"], 120)
         self.assertEqual(self.plan("a")["sop"], 10)
 
     def test_catalog_maintains_model_year_identity(self):
@@ -99,25 +101,24 @@ class ModelPlansTest(unittest.TestCase):
         self.assertEqual(len([p for p in self.store.read_sales()["products"] if is_model_plan(p)]), 1)
 
     def export_body(self, months, locks=False):
-        products = self.store.read_sales()["products"]
-        groups = {}
-        for product in products:
-            groups.setdefault((product["brand"], product["model"]), []).append(product)
-        rows, ids = [], []
+        sales = self.store.read_sales()
+        products = [p for p in sales["products"] if not p.get("read_only")] + sales.get("generation_members", {}).get("products", [])
+        groups = generation_model_groups(products)[0]
+        rows, ids, scopes = [], [], []
         metrics = ["锁单数", "SOP计划量"] if locks else ["SOP计划量"]
-        for (brand, model), members in groups.items():
+        for (brand, model, parent), members in groups:
             for metric in metrics:
                 rows.append(["车型汇总", brand, model, "", metric, *([None] * len(months)), ""])
-                ids.append(None)
+                ids.append(None); scopes.append(parent)
             for p in members:
                 for metric in metrics:
                     if metric == "锁单数" and is_model_plan(p):
                         continue
                     rows.append(["版本明细", brand, model, p["version"], metric, *([None] * len(months)), ""])
-                    ids.append(p["id"])
+                    ids.append(p["id"]); scopes.append(parent)
         return {"schema_version": 1, "current_month": "2026-10", "months": months, "include_versions": True,
                 "include_locks": locks, "scope": "all", "headers": ["层级", "品牌", "车型", "版本", "指标", *months, "数据说明"],
-                "rows": rows, "row_product_ids": ids, "selected_product_ids": [p["id"] for p in products],
+                "rows": rows, "row_product_ids": ids, "row_parent_generations": scopes, "selected_product_ids": [p["id"] for p in products],
                 "annual_plans": [{m[:4]: None for m in months if m.endswith("-12")} for _ in rows]}
 
     def test_export_with_locks_model_only_and_offscreen_annual(self):
@@ -165,7 +166,7 @@ class ModelPlansTest(unittest.TestCase):
             sheet = book["SOP计划"]
             model = next(r for r in sheet.iter_rows() if r[1].value == "A 2026款 合计")
             self.assertEqual((model[3].value, model[5].value), (100, 100))
-            row = next(r[0].row for r in sheet.iter_rows() if r[2].value == MODEL_PLAN_LABEL)
+            row = next(r[0].row for r in sheet.iter_rows() if any(c.value == pid for c in r))
         finally:
             book.close()
         edit_cell(exported, f"D{row}", 70)

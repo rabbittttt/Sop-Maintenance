@@ -238,7 +238,11 @@ class PlanRoundtrip:
         requested_mode = source.pop("generation_mode", None)
         ids = source.pop("row_product_ids", None)
         selected_ids = source.pop("selected_product_ids", None)
+        row_parents = source.pop("row_parent_generations", None)
         clean = validate_export(source)
+        if row_parents is not None and (not isinstance(row_parents, list) or len(row_parents) != len(clean["rows"])
+                or any(value is not None and not isinstance(value, str) for value in row_parents)):
+            raise ValidationError("导出代际层级标识不完整，请刷新后重试。")
         if not isinstance(ids, list) or len(ids) != len(clean["rows"]):
             raise ValidationError("导出行缺少稳定版本编码，请刷新看板后重试。")
         if (not isinstance(selected_ids, list) or not selected_ids or len(selected_ids) > 5000
@@ -252,14 +256,26 @@ class PlanRoundtrip:
                 if ((requested_rules is not None and requested_rules != view.get("rule_signature"))
                         or (requested_mode is not None and requested_mode != view.get("mode"))):
                     raise ValidationError("代际规则或展示模式已变化，请刷新看板后重新导出。")
-                products = {p["id"]: p for p in sales["products"]}
+                member_data = sales.get("generation_members", {})
+                products = {p["id"]: p for p in [*sales["products"], *member_data.get("products", [])]}
                 if any(pid not in products for pid in selected_ids):
                     raise ValidationError("车型版本目录已变化，请刷新看板后重新导出。")
                 selected = {pid: products[pid] for pid in selected_ids}
                 groups = {}
                 for pid, product in selected.items():
-                    groups.setdefault((product["brand"], product["model"]), []).append(pid)
-                plans = {(r["product_id"], r["month"]): dict(r) for r in self.store.view_plans(sales)}
+                    groups.setdefault((product["brand"], product["model"], product.get("parent_generation") or None), []).append(pid)
+                plans = {(r["product_id"], r["month"]): dict(r)
+                         for r in [*self.store.view_plans(sales), *member_data.get("plans", [])]}
+                if row_parents is None:
+                    row_parents = []
+                    for row, pid in zip(clean["rows"], ids):
+                        candidates = [group[2] for group in groups if group[:2] == tuple(row[1:3])]
+                        if pid in selected:
+                            row_parents.append(selected[pid].get("parent_generation") or None)
+                        elif len(candidates) == 1:
+                            row_parents.append(candidates[0])
+                        else:
+                            raise ValidationError("同名父车型与单代际需要层级标识，请重新导出。")
                 current = self.store.clock().astimezone(TZ).strftime("%Y-%m")
                 end = horizon(current, self.store.settings()["bridge_m6"])
                 clean["current_month"] = current
@@ -268,7 +284,7 @@ class PlanRoundtrip:
                 seen_summary, seen_details = set(), set()
                 counts = []
                 for index, (row, pid) in enumerate(zip(clean["rows"], ids)):
-                    group = (row[1], row[2])
+                    group = (row[1], row[2], row_parents[index] or None)
                     metric = row[metric_col]
                     if group not in groups:
                         raise ValidationError("导出车型与已选版本范围不一致，请刷新后重试。")
@@ -279,16 +295,20 @@ class PlanRoundtrip:
                         members = groups[group]
                     else:
                         if (not isinstance(pid, str) or pid not in selected or (pid, metric) in seen_details
-                                or tuple(row[1:4]) != tuple(selected[pid][k] for k in ("brand", "model", "version"))):
+                                or tuple(row[1:4]) != tuple(selected[pid][k] for k in ("brand", "model", "version"))
+                                or group[2] != (selected[pid].get("parent_generation") or None)):
                             raise ValidationError("导出版本编码与名称不一致或出现重复，请刷新后重试。")
                         seen_details.add((pid, metric))
                         members = [pid]
                     row_counts = {}
                     if metric == "SOP计划量":
+                        def amount(month):
+                            # Editable rows are raw inputs, never an automatic fallback.
+                            return plans.get((pid, month), {}).get("sop") if pid is not None else plan_total([selected[p] for p in members], month, plans)
                         for offset, month in enumerate(clean["months"]):
-                            row[metric_col + 1 + offset] = plan_total([selected[p] for p in members], month, plans)
+                            row[metric_col + 1 + offset] = amount(month)
                         for year in clean["annual_plans"][index]:
-                            values = [plan_total([selected[p] for p in members], f"{year}-{m:02d}", plans) for m in range(1, 13)]
+                            values = [amount(f"{year}-{m:02d}") for m in range(1, 13)]
                             clean["annual_plans"][index][year] = _sum_known(values)
                             row_counts[year] = sum(v is not None for v in values)
                     else:
@@ -313,6 +333,8 @@ class PlanRoundtrip:
                                                          "baseline_sop": row.get("sop"), "revision": row.get("revision", 0)}
                     editable[pid] = allowed
                 context = {"token": uuid.uuid4().hex, "row_product_ids": ids, "inline_schema": 2,
+                           "row_parent_generations": row_parents,
+                           "automatic_plan_values_by_product": {pid: {month: plans.get((pid, month), {}).get("auto_sop") for month in clean["months"]} for pid in selected},
                            "include_versions": clean["include_versions"], "months": clean["months"],
                            "selected_product_ids": selected_ids, "products": list(selected.values()),
                            "editable_months_by_product": editable,

@@ -54,7 +54,7 @@ async function main() {
     };
     const editable = new Set(mappings.filter(c => c.editable).map(c => c.cell));
     unlocked[spec.name] = data.layout.cells.filter(c => c.sheet === spec.name && c.editable).map(c => c.cell);
-    sheetControls[spec.name] = {hidden_start:spec.product_column,freeze_rows:spec.first_data_row-1,top_left:`D${spec.first_data_row}`,structural:inline,hidden_rows:spec.rows.filter(r=>r.hidden).map(r=>r.row)};
+    sheetControls[spec.name] = {hidden_start:spec.product_column,freeze_rows:spec.first_data_row-1,top_left:`D${spec.first_data_row}`,structural:inline,hidden_rows:spec.rows.filter(r=>r.hidden).map(r=>r.row),outline_rows:spec.rows.filter(r=>r.outline_level).map(r=>[r.row,r.outline_level])};
     setupPlanSheet(sheet, {lastColumn:spec.last_column,visibleLastColumn:spec.visible_last_column,lastRow:spec.last_row,columns:spec.columns,headerRow:spec.header_row,firstDataRow:spec.first_data_row});
     sheet.getRange(`${column(spec.product_column)}:${last}`).format.columnWidth = 24;
     write(sheet, 1, 1, [[planTitle()]]);
@@ -73,7 +73,7 @@ async function main() {
       values[spec.kind_column-1] = item.kind;
       if (inline) values[spec.key_column-1] = item.key;
       if (item.kind === 'product') {
-        if (inline && !item.read_only) unlocked[spec.name].push(`A${r}`,`B${r}`,`C${r}`);
+        if (inline && !item.read_only && !item.identity_read_only) unlocked[spec.name].push(`A${r}`,`B${r}`,`C${r}`);
         values[spec.product_column-1] = item.product_id;
         for (const col of spec.columns.filter(c=>c.kind==='month')) {
           const address = `${column(col.column)}${r}`;
@@ -188,8 +188,18 @@ for index,name in enumerate(config['names'],1):
             protection=ET.Element(tag('sheetProtection'),{'sheet':'1','objects':'1','scenarios':'1','selectLockedCells':'0','selectUnlockedCells':'0'})
             children=list(root); data=root.find('m:sheetData',ns); root.insert(children.index(data)+1,protection)
         hidden_rows=set(controls.get('hidden_rows',[]))
+        outline_rows=dict(controls.get('outline_rows',[]))
+        if outline_rows:
+            properties=root.find('m:sheetPr',ns)
+            if properties is None:
+                properties=ET.Element(tag('sheetPr'));root.insert(0,properties)
+            outline=properties.find('m:outlinePr',ns)
+            if outline is None: outline=ET.SubElement(properties,tag('outlinePr'))
+            outline.set('summaryBelow','0')
         for row in root.findall('m:sheetData/m:row',ns):
-            if int(row.attrib['r']) in hidden_rows: row.set('hidden','1')
+            number=int(row.attrib['r'])
+            if number in hidden_rows: row.set('hidden','1')
+            if number in outline_rows: row.set('outlineLevel',str(outline_rows[number]))
         for validation in root.findall('m:dataValidations/m:dataValidation',ns):
             validation.attrib.update({'allowBlank':'1','showInputMessage':'1','showErrorMessage':'1','errorStyle':'stop','promptTitle':'SOP计划量（辆）','prompt':'只填非负整数。空白表示未填写，0表示明确不安排。','errorTitle':'请输入非负整数','error':'SOP计划量须为非负整数；未填写时请留空。'})
     save(filename,root)

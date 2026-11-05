@@ -6,7 +6,7 @@ import uuid
 
 from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
 
-from .source_rules import generation_display_model, normalize_generation, project_generation_sources
+from .source_rules import generation_display_model, normalize_generation, project_generation_sources, generation_parent
 from .store import (ConflictError, TZ, ValidationError, catalog_name_key, display_version,
                        horizon, product_display_model, quantity, stamp, text_field, validate_month)
 
@@ -52,7 +52,7 @@ def save_grid_batch(store, body):
         if (body.get("generation_mode") != view.get("mode")
                 or body.get("generation_rule_signature") != view.get("rule_signature")):
             raise ValidationError("代际范围或共享规则已变化，请重新加载表格后核对修改。")
-        visible = {p["id"]: p for p in sales["products"]}
+        visible = {p["id"]: p for p in sales["products"] + sales.get("generation_members", {}).get("products", [])}
         raw = {p["id"]: p for p in store._catalog_items()}
         rules = store._generation_rules()
         if rules["signature"] != view.get("rule_signature"):
@@ -98,6 +98,8 @@ def save_grid_batch(store, body):
                 if _revision(change.get("revision")) != prior["revision"]:
                     conflicts.append({"kind": "catalog", "product_id": pid, "current": prior})
                 values = {field: change[field] for field in ("brand", "model", "version", "active") if field in change}
+                if prior.get("summary_generation") and any(value != prior.get(field) for field, value in values.items()):
+                    raise ValidationError("汇总车型的名称和状态由共享规则维护，当前行仅维护计划数量。")
                 if not values:
                     raise ValidationError("版本行未提供修改内容。")
                 trusted = {"id": pid, "baseline": {field: prior.get(field) for field in values}, **values}
@@ -144,12 +146,12 @@ def save_grid_batch(store, body):
 
             updated, deactivated = store._merge_workbook_catalog(trusted_edits, None, recorded_at, current_month)
             catalog = {p["id"]: p for p in store._catalog_items()}
-            names = {catalog_name_key({**p, "model": product_display_model(p)}) for p in catalog.values()}
+            names = {catalog_name_key({**p, "model": product_display_model(p)}) for p in catalog.values() if not p.get("summary_generation")}
             entry_ids, created = {}, []
             summary_models = {(normalize_generation(name).partition(" ")[0], generation_display_model(name))
                               for name in rules["groups"]}
             for entry in entries:
-                if (not isinstance(entry, dict) or set(entry) - {"client_id", "brand", "model", "version", "plans", "plan_level"}
+                if (not isinstance(entry, dict) or set(entry) - {"client_id", "brand", "model", "version", "plans", "plan_level", "parent_generation"}
                         or not isinstance(entry.get("plans", []), list)):
                     raise ValidationError("新增版本行格式无效。")
                 client_id = text_field(entry.get("client_id"), "新增行编号", 100)
@@ -174,11 +176,15 @@ def save_grid_batch(store, body):
                 if name in names:
                     raise ValidationError("相同品牌、车型年款和版本已存在，请在已有行维护。")
                 names.add(name)
-                if (normalize_generation(labels["brand"]), normalize_generation(labels["model"])) in summary_models:
-                    raise ValidationError("汇总代际由成员计算，请新增对应的单代际版本。")
-                provisional, _ = project_generation_sources({"products": [{**labels, "id": "new-grid-row"}]}, view["mode"], rules)
-                if not any(p["id"] == "new-grid-row" and not p.get("read_only") for p in provisional["products"]):
-                    raise ValidationError("该新增版本属于汇总代际，请切换至单代际后新增。")
+                parent = generation_parent(labels, rules)
+                requested_parent = entry.get("parent_generation")
+                if requested_parent is not None and requested_parent != parent:
+                    raise ValidationError("新增单代际不属于所选汇总车型，请核对共享规则和年款。")
+                if (normalize_generation(labels["brand"]), normalize_generation(labels["model"])) in summary_models and not parent:
+                    raise ValidationError("该汇总车型已提供可维护的总量行，请在已有总量行填写。")
+                provisional, _ = project_generation_sources({"products": [{**labels, "id": "new-grid-row"}]}, "detail", rules)
+                if not any(p["id"] == "new-grid-row" for p in provisional["products"]):
+                    raise ValidationError("新增行不在可维护的单代际范围内。")
                 values, months = [], set()
                 for cell in entry.get("plans", []):
                     if not isinstance(cell, dict) or set(cell) != {"month", "sop"}:

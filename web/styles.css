@@ -926,3 +926,8 @@ input[aria-readonly="true"]{background:#f1f4f8;color:#4c5e73}
   .app-sidebar { display:none!important; }
   .has-side-nav .workspace { margin-left:0; }
 }
+
+/* Nested generations remain part of the same compact planning table. */
+.generation-member-row .sticky-name{padding-left:30px;background:#f4f7fb}
+.generation-member-row.version-row .sticky-name{padding-left:48px;background:#fafbfd}
+.generation-member-row .row-toggle{font-size:12px;font-weight:600}

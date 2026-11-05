@@ -25,7 +25,7 @@ SCHEMA_VERSION = 5
 LAYOUT_VERSION = "continuous-inline-v2"
 # Bump this when managed workbook rendering or Excel compatibility changes
 # without changing its trusted cell map. Old exports resolve to revision 0.
-PRESENTATION_VERSION = 7
+PRESENTATION_VERSION = 8
 PREVIOUS_CONTINUOUS_LAYOUT = "continuous-blue-v2"
 LEGACY_CONTINUOUS_LAYOUT = "continuous-blue-v1"
 LEGACY_ANNUAL_LAYOUT = "annual-blue-v1"
@@ -112,6 +112,27 @@ def _signature(context):
     return hashlib.sha256(json.dumps(signed, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def generation_model_groups(products):
+    """Return distinct parent/member model groups in parent-first display order."""
+    grouped, parents = {}, {}
+    for product in products:
+        key = (product.get("brand", ""), product.get("model", ""), product.get("parent_generation") or None)
+        grouped.setdefault(key, []).append(product)
+        if "summary_member_product_ids" in product and is_model_plan(product):
+            parents[product["summary_generation"]] = key
+    result, seen = [], set()
+    for key, members in grouped.items():
+        if key in seen or (key[2] in parents and parents[key[2]] != key):
+            continue
+        result.append((key, members)); seen.add(key)
+        summaries = [name for name, parent in parents.items() if parent == key]
+        for child, child_members in grouped.items():
+            if child not in seen and child[2] in summaries:
+                result.append((child, child_members)); seen.add(child)
+    result.extend((key, members) for key, members in grouped.items() if key not in seen)
+    return result, parents
+
+
 def _continuous_layout(products, months, editable_months, current_month, plans=None, include_manual=True):
     """Single chronological input grid. Year totals never form input mappings."""
     plans = plans or {}
@@ -136,8 +157,10 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
         headers[1][col["column"] - 1] = col["label"]
     headers[1][-2:] = ["product_id", "row_kind"]
     grouped, rows, cells, formulas, brand_totals = {}, [], [], {}, []
-    for product in products:
-        grouped.setdefault(product.get("brand", ""), {}).setdefault(product.get("model", ""), []).append(product)
+    ordered_groups, hierarchy_parents = generation_model_groups(products)
+    for (brand, model, parent_generation), members in ordered_groups:
+        grouped.setdefault(brand, {})[(model, parent_generation)] = members
+    summary_rows, member_rows = {}, {}
     merges = ["A3:A4", "B3:B4", "C3:C4"]
     merges += [f"{_column(y['first_column'])}3:{_column(y['last_column'])}3" for y in years]
     editable = set(editable_months)
@@ -149,8 +172,9 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
             formulas[f"{letter}{row}"] = f'=IF(COUNT({refs})=0,"",SUM({refs}))' if refs else '=""'
     for brand, models in sorted(grouped.items(), key=lambda item: brand_order_key(item[0])):
         brand_start, model_totals = index, []
-        for model, members in models.items():
+        for (model, parent_generation), members in models.items():
             start = index
+            is_member = parent_generation in hierarchy_parents
             for product in members:
                 active = product.get("active", True)
                 version = product.get("version", "")
@@ -158,6 +182,9 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
                 rows.append({"row": index, "kind": "product", "product_id": product["id"],
                              "brand": brand, "model": model, "version": version, "active": active,
                              "read_only": bool(product.get("read_only")),
+                             "identity_read_only": bool(product.get("identity_read_only")),
+                             "parent_generation": parent_generation, "outline_level": int(is_member),
+                             "hidden": is_member or not active,
                              "label_a": brand if index == brand_start else None,
                              "label_b": model if index == start else None, "label_c": label or None})
                 for col in columns:
@@ -178,7 +205,8 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
             if index - start > 1:
                 merges.append(f"B{start}:B{index - 1}")
             rows.append({"row": index, "kind": "model_total", "label_a": None,
-                         "label_b": f"{model} 合计", "label_c": None})
+                         "label_b": f"{model} 合计", "label_c": None,
+                         "parent_generation": parent_generation, "outline_level": int(is_member), "hidden": is_member})
             merges.append(f"B{index}:C{index}")
             totals(index, range(start, index))
             model_rows = [start + offset for offset, product in enumerate(members) if is_model_plan(product)]
@@ -195,7 +223,13 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
                         year = next(y for y in years if y["year"] == col["year"])
                         refs = f"{_column(year['first_column'])}{index}:{_column(year['last_month_column'])}{index}"
                         formulas[f"{letter}{index}"] = f'=IF(COUNT({refs})=0,"",SUM({refs}))'
-            model_totals.append(index)
+            if is_member:
+                member_rows.setdefault(parent_generation, []).append(index)
+            else:
+                model_totals.append(index)
+                for summary, key in hierarchy_parents.items():
+                    if key == (brand, model, parent_generation):
+                        summary_rows[summary] = (index, model_rows)
             index += 1
         rows.append({"row": index, "kind": "brand_total", "label_a": None,
                      "label_b": f"{brand} 合计", "label_c": None})
@@ -206,6 +240,21 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
     rows.append({"row": index, "kind": "grand_total", "label_a": "总计", "label_b": None, "label_c": None})
     merges.append(f"A{index}:C{index}")
     totals(index, brand_totals)
+    for summary, (row, direct_rows) in summary_rows.items():
+        children = member_rows.get(summary, [])
+        if not children:
+            continue
+        for col in columns:
+            letter = _column(col["column"])
+            if col["kind"] == "month":
+                direct = ",".join(f"{letter}{r}" for r in direct_rows)
+                detail = ",".join(f"{letter}{r}" for r in children)
+                fallback = f'IF(COUNT({detail})=0,"",SUM({detail}))'
+                formulas[f"{letter}{row}"] = f'=IF(COUNT({direct})>0,SUM({direct}),{fallback})' if direct else "=" + fallback
+            else:
+                year = next(y for y in years if y["year"] == col["year"])
+                refs = f"{_column(year['first_column'])}{row}:{_column(year['last_month_column'])}{row}"
+                formulas[f"{letter}{row}"] = f'=IF(COUNT({refs})=0,"",SUM({refs}))'
     manual_section = None
     if include_manual:
         title_row = index + 2
@@ -253,7 +302,7 @@ def _inline_layout(products, months, editable_months, current_month, plans=None)
         if row["kind"] == "product":
             product = catalog[row["product_id"]]
             row.update(label_b=product["model"], label_c=product["version"],
-                       hidden=not product.get("active", True))
+                       hidden=row.get("hidden", False) or not product.get("active", True))
             row["values"] = {month: plans.get((product["id"], month), {}).get("sop") for month in months}
         else:
             row["values"] = {}
@@ -261,12 +310,14 @@ def _inline_layout(products, months, editable_months, current_month, plans=None)
     for start, first in enumerate(detail_rows):
         if first["kind"] != "product" or (start and detail_rows[start - 1]["kind"] == "product"
                 and detail_rows[start - 1]["brand"] == first["brand"]
-                and detail_rows[start - 1]["model"] == first["model"]):
+                and detail_rows[start - 1]["model"] == first["model"]
+                and detail_rows[start - 1].get("parent_generation") == first.get("parent_generation")):
             continue
         end = start + 1
         while (end < len(detail_rows) and detail_rows[end]["kind"] == "product"
                and detail_rows[end]["brand"] == first["brand"]
                and detail_rows[end]["model"] == first["model"]
+               and detail_rows[end].get("parent_generation") == first.get("parent_generation")
                and detail_rows[end]["row"] == detail_rows[end - 1]["row"] + 1):
             detail_rows[end]["label_a"] = None
             detail_rows[end]["label_b"] = None
@@ -368,9 +419,13 @@ class WorkbookSync:
     def _context(self):
         sales = self.store.read_sales()
         current = self.store.clock().astimezone(TZ).strftime("%Y-%m")
-        products = sales["products"]
+        members = sales.get("generation_members", {})
+        products = ([p for p in sales["products"] if not p.get("read_only")]
+                    + members.get("products", [])) if members else sales["products"]
         plan_end = horizon(current, self.store.settings()["bridge_m6"])
-        plans = {(r["product_id"], r["month"]): dict(r) for r in self.store.view_plans(sales)}
+        product_ids = {p["id"] for p in products}
+        plans = {(r["product_id"], r["month"]): dict(r)
+                 for r in [*self.store.view_plans(sales), *members.get("plans", [])] if r["product_id"] in product_ids}
         business_months = sorted(set(month_range(current, plan_end))
                         | {month_add(current, offset) for offset in (-3, -2, -1)}
                         | {r["month"] for r in sales["sales"]}
