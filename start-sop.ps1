@@ -5,7 +5,8 @@ $env:PYTHONIOENCODING = 'utf-8'
 $sopRoot = $PSScriptRoot
 $sopUrl = "http://127.0.0.1:$Port"
 $sopRuntime = $env:SOP_PYTHON_PATH
-if ($sopRuntime) {
+$sopExplicitRuntime = [bool]$sopRuntime
+if ($sopExplicitRuntime) {
     $sopRuntime = [Environment]::ExpandEnvironmentVariables($sopRuntime)
     if (-not [IO.Path]::IsPathRooted($sopRuntime)) { $sopRuntime = Join-Path $sopRoot $sopRuntime }
     if (-not (Test-Path -LiteralPath $sopRuntime -PathType Leaf)) {
@@ -14,20 +15,52 @@ if ($sopRuntime) {
 } else {
     $sopWorkspace = Get-Item -LiteralPath $sopRoot
     while ($sopWorkspace -and $sopWorkspace.Name -ine 'Project') { $sopWorkspace = $sopWorkspace.Parent }
-    if (-not $sopWorkspace) { throw '找不到 Project 工作区。请将项目放在 Project 目录下，并初始化 Project/.venv。' }
+    if (-not $sopWorkspace) { throw '找不到 Project 工作区。请将项目放在 Project 目录下，再启动工作台。' }
     $sopPythonSuffix = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { '.venv\Scripts\python.exe' } else { '.venv/bin/python' }
     $sopRuntime = Join-Path $sopWorkspace.FullName $sopPythonSuffix
-    if (-not (Test-Path -LiteralPath $sopRuntime -PathType Leaf)) { throw "Project 共享 Python 不存在：$sopRuntime。请运行工作区或 SOP 的初始化环境入口。" }
 }
-$sopProbe = "import json,sys; sys.version_info >= (3,10) or sys.exit('Python 3.10+ is required'); import openpyxl; print(json.dumps({'executable':sys.executable},ensure_ascii=True))"
-try {
-    $sopProbeOutput = & $sopRuntime -X utf8 -c $sopProbe 2>&1
-    if ($LASTEXITCODE -ne 0) { throw ($sopProbeOutput | Out-String) }
-    $sopRuntime = ($sopProbeOutput | ConvertFrom-Json).executable
-    if (-not $sopRuntime) { throw 'Python did not report its executable.' }
-} catch {
-    throw "Python 不可用或缺少依赖：$sopRuntime。请使用该解释器安装 requirements.txt。$($_.Exception.Message)"
+
+$sopExpectedPrefix = if ($sopExplicitRuntime) { $null } else { Split-Path -Parent (Split-Path -Parent $sopRuntime) }
+
+function Get-SopRuntimeState([string]$Python, [string]$ExpectedPrefix) {
+    if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+        return @{ Ready = $false; Details = "Project 共享 Python 不存在：$Python" }
+    }
+    $probe = "import json,sys; sys.version_info >= (3,10) or sys.exit('Python 3.10+ is required'); import openpyxl; print(json.dumps({'executable':sys.executable,'prefix':sys.prefix},ensure_ascii=True))"
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 turns native stderr into ErrorRecord objects.
+        # Capture the probe failure so a missing package can reach initialization.
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Python -X utf8 -c $probe 2>&1)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) { return @{ Ready = $false; Details = ($output | Out-String).Trim() } }
+        $info = ($output | Out-String) | ConvertFrom-Json -ErrorAction Stop
+        if (-not $info.executable) { throw 'Python did not report its executable.' }
+        if ($ExpectedPrefix -and [IO.Path]::GetFullPath($info.prefix).TrimEnd('\', '/') -ine [IO.Path]::GetFullPath($ExpectedPrefix).TrimEnd('\', '/')) {
+            return @{ Ready = $false; Details = '共享 Python 未使用 Project/.venv，请保留旧环境并在本机重建。' }
+        }
+        return @{ Ready = $true; Executable = $info.executable }
+    } catch {
+        return @{ Ready = $false; Details = $_.Exception.Message }
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
 }
+
+$sopRuntimeState = Get-SopRuntimeState $sopRuntime $sopExpectedPrefix
+if (-not $sopRuntimeState.Ready) {
+    if ($CheckRuntime -or $sopExplicitRuntime) {
+        throw "Python 不可用或缺少依赖：$sopRuntime。请使用该解释器安装 requirements.txt。$($sopRuntimeState.Details)"
+    }
+    Write-Host '正在准备 Project 共享 Python 环境和 SOP 依赖，首次启动可能需要几分钟…'
+    & (Join-Path $sopRoot 'setup-environment.ps1')
+    $sopRuntimeState = Get-SopRuntimeState $sopRuntime $sopExpectedPrefix
+    if (-not $sopRuntimeState.Ready) {
+        throw "环境初始化后检查仍未通过，未启动工作台：$($sopRuntimeState.Details)"
+    }
+}
+$sopRuntime = $sopRuntimeState.Executable
 if ($CheckRuntime) { Write-Output $sopRuntime; exit 0 }
 $env:SOP_PYTHON_PATH = $sopRuntime
 $sopPythonDirectory = Split-Path -Parent $sopRuntime
