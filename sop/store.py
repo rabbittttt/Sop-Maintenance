@@ -1071,7 +1071,14 @@ class SOPStore:
                     name_key = catalog_name_key(labels)
                     candidates = names.get(name_key, [])
                     requested_parent = entry.get("parent_generation")
-                    actual_parent = generation_parent(labels, self._generation_rules())
+                    rules = self._generation_rules()
+                    if is_model_plan(labels):
+                        current_summaries = {normalize_generation(name) for name in rules["groups"]}
+                        # New named input must not resolve to a hidden historical
+                        # parent. Stable-ID changes still preserve its old plans.
+                        candidates = [p for p in candidates if not p.get("summary_generation")
+                                      or normalize_generation(p["summary_generation"]) in current_summaries]
+                    actual_parent = generation_parent(labels, rules)
                     if requested_parent is not None and requested_parent != actual_parent:
                         raise ValidationError("新增单代际不属于所选汇总车型，请核对共享规则和年款。")
                     singles = [p for p in candidates if not p.get("summary_generation")]

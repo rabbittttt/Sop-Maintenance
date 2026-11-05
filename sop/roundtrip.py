@@ -6,6 +6,7 @@ Downloads may be authored by the bundled Node renderer or the offline Python wri
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -152,7 +153,7 @@ def _snapshot(workbook):
 
 def _metadata(workbook):
     if IMPORT_SHEET not in workbook.sheetnames:
-        raise ValidationError("这个文件没有可回填的导出标识。请在看板重新导出并勾选“包含版本明细”，修改后再导入。")
+        raise ValidationError("这个文件没有可回填的导出标识。可导入含品牌、车型年款和月份的普通车型计划表，无需版本明细。")
     sheet = workbook[IMPORT_SHEET]
     if sheet.sheet_state == "visible":
         raise ValidationError("导出标识页已被改动，请恢复原文件或重新导出。")
@@ -204,6 +205,8 @@ class PlanRoundtrip:
             store.db.executescript("""
                 CREATE TABLE IF NOT EXISTS plan_download_exports (
                     token TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS plan_model_import_previews (
+                    fingerprint TEXT PRIMARY KEY, snapshot TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS plan_download_entry_imports (
                     token TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TRIGGER IF NOT EXISTS plan_download_no_update BEFORE UPDATE ON plan_download_exports
@@ -500,6 +503,13 @@ class PlanRoundtrip:
 
     def _parse(self, content):
         with _read_workbook(content) as workbook:
+            if IMPORT_SHEET not in workbook.sheetnames:
+                from .model_table import parse_model_table
+                visible = [sheet for sheet in workbook if sheet.sheet_state == "visible"]
+                sheet = workbook[PLAN_SHEET] if PLAN_SHEET in workbook.sheetnames else visible[0] if len(visible) == 1 else None
+                if sheet is None:
+                    raise ValidationError("请选择包含一张车型月度计划主表的 Excel，需有品牌、车型年款和月份，无需版本。")
+                return None, {"_plain_model_table": hashlib.sha256(content).hexdigest()}, {}, parse_model_table(sheet)
             token, versions, _ = _metadata(workbook)
             with self.store.lock:
                 row = self.store.db.execute("SELECT payload FROM plan_download_exports WHERE token=?", (token,)).fetchone()
@@ -567,6 +577,14 @@ class PlanRoundtrip:
             if not actor:
                 raise ValidationError("登录用户不能为空。")
         token, exported, values, entries = self._parse(content)
+        if exported.get("_plain_model_table"):
+            from .model_import import import_model_table
+            with self._lock():
+                self._sync_before()
+                with self.store.lock:
+                    result = import_model_table(self.store, entries, choice=choice, actor=actor,
+                                                fingerprint=exported["_plain_model_table"])
+                return self._sync_import_result(result) if result.get("ok") else result
         with self._lock():
             self._sync_before()
             with self.store.lock:
@@ -650,14 +668,16 @@ class PlanRoundtrip:
                         "deactivated": result.get("deactivated_count", 0)}
             if exported.get("manifest") is not None and result["created_count"]:
                 response["warning"] = "新增版本已保存；后续更名或删除这些新增行时，请先重新导出最新明细。"
-            if self.workbook_sync is not None:
-                # The database commit has succeeded. A blocked Excel replacement is
-                # a pending writeback, never a failed import that invites a retry.
-                try:
-                    after = self.workbook_sync.sync()
-                except Exception as error:
-                    after = {"status": "error", "message": str(error)}
-                response["workbook_sync"] = after
-                if after.get("status") != "synced":
-                    response["warning"] = (response.get("warning", "") + " 计划已导入；维护表待同步：" + after.get("message", "请保存并关闭 Excel 后同步。")).strip()
-            return response
+            return self._sync_import_result(response)
+
+    def _sync_import_result(self, response):
+        # Business commit succeeded; a locked Excel file must not invite a retry.
+        if self.workbook_sync is not None:
+            try:
+                after = self.workbook_sync.sync()
+            except Exception as error:
+                after = {"status": "error", "message": str(error)}
+            response["workbook_sync"] = after
+            if after.get("status") != "synced":
+                response["warning"] = (response.get("warning", "") + " 计划已导入；维护表待同步：" + after.get("message", "请保存并关闭 Excel 后同步。")).strip()
+        return response

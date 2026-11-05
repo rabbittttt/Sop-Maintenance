@@ -24,6 +24,18 @@ assert.match(catalogConflict,/启用状态/);
 assert.match(catalogConflict,/停用/);
 assert.match(catalogConflict,/导出后计划已更新/);
 assert.doesNotMatch(catalogConflict,/NaN|undefined/);
+assert.match(catalogConflict,/<th>导出时<\/th>/);
+const plainConflict=run("planConflictTableHtml([{brand:'智界',model:'R7 2027款',month:'2027-03',baseline_unknown:true,baseline:null,workbook:123,database:111}])");
+assert.match(plainConflict,/<th>原表基准<\/th>/);
+assert.match(plainConflict,/<td>未提供<\/td>/);
+assert.doesNotMatch(plainConflict,/导出时|待维护/);
+const maintenanceConflict=run("planConflictTableHtml([{brand:'智界',model:'R7 2027款',month:'2027-03',baseline:null,workbook:123,database:111}],true)");
+assert.match(maintenanceConflict,/<th>共同基准<\/th>/);
+assert.match(maintenanceConflict,/<td>—<\/td>/);
+const plainChoices=run("planImportConflictsHtml([{baseline_unknown:true,baseline:null,workbook:123,database:111}])");
+assert.match(plainChoices,/表格计划与网页当前值不一致，请选择保留网页值或采用表格值/);
+assert.doesNotMatch(plainChoices,/两边都修改/);
+assert.match(run("planImportConflictsHtml([{baseline:100,workbook:123,database:111}])"),/两边都修改/);
 context.validFile={name:'SOP计划.xlsx',size:100,encoded:'cGxhbjEyMw=='};
 
 for(const file of [null,{name:'计划.xls',size:100},{name:'计划.xlsx',size:0},{name:'计划.xlsx',size:12*1024*1024+1}]){
@@ -83,6 +95,11 @@ const conflict={product_id:'p1',month:'2026-10',baseline:100,workbook:120,databa
 let ui=setupDialog();
 assert.equal(ui.save.disabled,true);
 assert.match(ui.dialog.html,/含版本明细/);
+assert.match(ui.dialog.html,/无需版本列或导出标识/);
+assert.match(ui.dialog.html,/只导入非空计划（含0）/);
+assert.match(ui.dialog.html,/空白和缺行保留原值，不停用车型/);
+assert.match(ui.dialog.html,/带标识的导出表可识别真正修改/);
+assert.doesNotMatch(ui.dialog.html,/请重新导出|请选择看板导出的含版本明细表/);
 chooseFile(ui);
 assert.equal(ui.save.disabled,false);
 let resolveResponse;
@@ -118,7 +135,7 @@ assert.deepEqual(requests.at(-1).body,{...prepared,choice:'db'});
 assert.equal(readCount,readsBefore+1,'Conflict resolution reuses the same uploaded bytes.');
 assert.equal(refreshes,1);
 assert.equal(ui.dialog.open,false);
-assert.match(messages.at(-1).text,/已导入 2 项计划，新增 1 个版本/);
+assert.match(messages.at(-1).text,/已导入 2 项计划，新增 1 行/);
 assert.match(messages.at(-1).text,/关闭后自动回写/);
 
 ui=setupDialog();chooseFile(ui);
