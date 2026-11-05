@@ -25,6 +25,8 @@
 
 **输入路径：** `--source-dir`（数据导入命令）或网关 `source_dir` 显式配置优先；默认读取顺序为 `SOP_SOURCE_DIR`、`SHARED_DATA_ROOT/订单汇总`、同级 `../共享数据/订单汇总`，最后仅在同级共享根不存在时兼容 `input_file/`。`SOP_SOURCE_DIR` 和 `SHARED_DATA_ROOT` 支持相对 SOP 项目根目录的路径，例如 `SHARED_DATA_ROOT=../共享数据`；也兼容绝对路径，不随启动时的当前目录改变。显式指定的共享根或已存在的共享根缺少订单文件时会报告缺失，不改读旧副本。订单汇总目录只提供只读输入；计划维护表默认位于共享根的 `SOP计划/SOP计划维护.xlsx`，数据库和规则仍由原项目维护。其他汇总报表不会加入 SOP 销量计算。
 
+使用共享数据时，无需创建或保留本项目的空 `input_file/` 目录。该目录仅用于没有共享根的独立运行场景，届时按需创建并放入实际输入文件。
+
 **计划表路径：** 网关 `plan_file` 或命令行 `--plan-file` 显式路径沿用既有优先级，其次为 `SOP_PLAN_DIR/SOP计划维护.xlsx`、`SHARED_DATA_ROOT/SOP计划/SOP计划维护.xlsx`、同级 `../共享数据/SOP计划/SOP计划维护.xlsx`；没有共享根时兼容 `input_file/SOP计划维护.xlsx`。`SOP_PLAN_DIR` 支持相对 SOP 项目根目录的路径，例如 `../共享数据/SOP计划`。创建与同步维护表写入所选计划目录，销售源目录不参与此选择。门户预览仍将计划表复制到隔离目录，并通过网关 `plan_file` 绑定该副本。
 
 **数据与规则路径：** `SOP_DATA_DIR`（默认 `./data`）和 `SOP_SHARED_CONFIG`（例如 `../订单分析/scripts/config/shared_config.py`）的相对值也按 SOP 项目根目录解析。服务默认数据库目录及数据导入命令默认输出遵循 `SOP_DATA_DIR`；显式 `--data-dir` / `--output` 优先，网关 `data_dir` / `plan_file` 继续保持既有最高优先级和绝对路径校验。运行时会解析为绝对路径；不需要在本地配置中写死盘符。
@@ -41,11 +43,11 @@
 | `docs/` | [业务规则与使用说明](docs/业务规则与使用说明.md) | 是 |
 | `../共享数据/订单汇总/` | 只读销售来源；与其他项目共用 | 否 |
 | `../共享数据/SOP计划/` | 可同步读写的 `SOP计划维护.xlsx` | 否 |
-| `input_file/` | 无共享根的独立项目兼容输入目录 | 否 |
+| `input_file/` | 无共享根时按需创建的独立项目兼容输入目录；共享模式无需保留 | 否 |
 | `data/` | 数据库、来源解析、设置、快照及日志 | 否 |
 | `output_file/` | 临时导出和本地核验文件 | 否 |
 
-业务模块集中在 `sop/` 包，根目录只保留 `server.py` 作为 Python 启动入口；运行数据与临时文件通过 `.gitignore` 排除。换电脑时，复制 `data/`、`input_file/` 及所使用的共享输入和计划目录，才能保留当前业务状态。不要仅依靠 Git 仓库保存计划或历史快照。
+业务模块集中在 `sop/` 包，根目录只保留 `server.py` 作为 Python 启动入口；运行数据与临时文件通过 `.gitignore` 排除。换电脑时，应迁移 `data/` 及实际使用的共享输入和计划目录，以保留当前业务状态；只有独立模式使用了 `input_file/` 时，才需额外迁移该目录。不要仅依靠 Git 仓库保存计划或历史快照。
 
 需要手动刷新销量缓存时，在项目根目录运行 `../.venv/Scripts/python.exe -m sop.data`；只读检查原始 Excel 可运行 `../.venv/Scripts/python.exe scripts/inspect_sales.py`。非 Windows 使用对应的 `../.venv/bin/python`。
 
