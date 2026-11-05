@@ -12,6 +12,7 @@ import os
 import signal
 import socket
 import threading
+import time
 import webbrowser
 from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -418,15 +419,24 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     result = store.save_shipments(body)
                 elif path == "/api/settings":
                     if "generation_mode" in body and workbook_sync:
+                        started = time.monotonic()
+                        target_mode = body["generation_mode"] if body["generation_mode"] in ("detail", "summary") else "invalid"
+                        LOGGER.info("generation_switch target=%r phase=begin", target_mode)
                         # Accept saved edits using the old view before replacing
                         # its rows. A conflict must leave the selected mode intact.
                         with workbook_sync.lock:
                             before = workbook_sync.sync()
+                            LOGGER.info("generation_switch target=%r phase=input_checked status=%s elapsed_ms=%d",
+                                        target_mode, before["status"], (time.monotonic() - started) * 1000)
                             if before["status"] in {"error", "conflict"} or not workbook_sync._input_checked:
                                 self._json({"error": before["message"], "workbook_sync": before}, 409)
                                 return
                             result = store.update_settings(body)
+                            LOGGER.info("generation_switch target=%r phase=mode_saved elapsed_ms=%d",
+                                        target_mode, (time.monotonic() - started) * 1000)
                             result["workbook_sync"] = workbook_sync.sync()
+                            LOGGER.info("generation_switch target=%r phase=complete status=%s elapsed_ms=%d",
+                                        target_mode, result["workbook_sync"]["status"], (time.monotonic() - started) * 1000)
                     else:
                         result = store.update_settings(body)
                         if workbook_sync:

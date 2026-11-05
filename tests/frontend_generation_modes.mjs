@@ -13,18 +13,22 @@ const base={current_month:'2026-10',plan_end:'2027-12',now:'2026-10-28T12:00:00+
   plans:[],sales:[],model_sales:[],settings:{generation_mode:'detail'},
   generation_view:{mode:'detail',rule_signature:'first',warnings:[]},workbook_sync:{status:'absent'}};
 let serverState=structuredClone(base),status={status:'absent',generation_view:serverState.generation_view};
-let post,reads=0,rejectRead=false;
+let post,reads=0,readFailures=[];
+const connectionFailure=message=>Object.assign(new Error(message),{connection:true});
+const ruleFailure=message=>Object.assign(new Error(message),{status:400});
 const context=vm.createContext({localStorage:{getItem:()=>null},
   document:{hidden:false,querySelector:s=>nodes.get(s)||null,querySelectorAll:s=>s==='.table-scroll'?[scroll]:[]},
   requestAPI:async(path,body)=>{requests.push({path,body});
     if(path==='/api/settings')return post(body);
     if(path==='/api/plan-workbook/status')return status;
-    if(path==='/api/state'){reads++;if(rejectRead)throw new Error('配置无法读取');return structuredClone(serverState);}
+    if(path==='/api/state'){reads++;if(readFailures.length)throw readFailures.shift();return structuredClone(serverState);}
     throw new Error(path);},
   notify:(text,error)=>toasts.push({text,error}),
+  setTimeout:callback=>{callback();return 1;},clearTimeout(){},
 });
 vm.runInContext(source.split("document.addEventListener('click'")[0],context);
 const run=s=>vm.runInContext(s,context);
+context.originalAPI=run('api');
 context.initialState=structuredClone(base);
 run('state=initialState;api=requestAPI;toast=notify;indexData();planning()');
 assert.match(app.innerHTML,/id="generation-filter"[^]*?value="detail" selected[^]*?value="summary"/);
@@ -92,10 +96,83 @@ await run('pollWorkbookStatus()');
 assert.doesNotMatch(app.innerHTML,/代际范围暂不可用/);
 assert.equal(run('generationViewError'),'');
 
-// If response recovery also fails, old values are no longer editable/exportable.
-rejectRead=true;
+// A write can commit before its response is lost. Retry only state reads, never the POST.
+const postsBeforeRecovery=requests.filter(r=>r.path==='/api/settings').length;
+const readsBeforeRecovery=reads;
+post=async()=>{
+  serverState=structuredClone(base);
+  serverState.generation_view.rule_signature='after-lost-response';
+  readFailures=[connectionFailure('第一次读取连接失败'),connectionFailure('第二次读取连接失败')];
+  throw connectionFailure('写入响应丢失');
+};
 await run("changeGenerationMode('detail',control)");
-assert.match(app.innerHTML,/无法确认当前代际范围/);
+assert.equal(requests.filter(r=>r.path==='/api/settings').length,postsBeforeRecovery+1,'A lost response must not replay the settings write.');
+assert.equal(reads,readsBeforeRecovery+3,'State reads recover on the third attempt.');
+assert.equal(run('generationMode()'),'detail');assert.equal(control.value,'detail');
+assert.equal(run('generationViewError'),'');
+assert.doesNotMatch(app.innerHTML,/业务服务连接中断|代际范围暂不可用/);
 assert.equal(app.inert,false);assert.equal(control.disabled,false);
-assert.throws(()=>run("buildPlanExport({selectedMonths:['2026-10']})"),/无法确认/);
-console.log('PASS: generation selector, serialized switching, read-only projections, rule reload/error recovery and export scope.');
+
+// A persistent outage hides stale editable values and names the connection failure.
+const postsBeforeOutage=requests.filter(r=>r.path==='/api/settings').length;
+const readsBeforeOutage=reads;
+post=async()=>{
+  serverState={...structuredClone(base),settings:{generation_mode:'summary'},
+    generation_view:{mode:'summary',rule_signature:'confirmed-after-reconnect',warnings:[]},
+    products:[{id:'group',brand:'问界',model:'F2N',version:'Max',read_only:true,member_product_ids:['member']}]};
+  readFailures=[connectionFailure('第一次 GET 失败'),connectionFailure('第二次 GET 失败'),connectionFailure('最后一次 GET 失败')];
+  throw connectionFailure('旧的 POST 错误');
+};
+await run("changeGenerationMode('summary',control)");
+assert.equal(requests.filter(r=>r.path==='/api/settings').length,postsBeforeOutage+1);
+assert.equal(reads,readsBeforeOutage+3);
+assert.equal(run('generationMode()'),'detail','An uncertain response must not guess the new server mode.');
+assert.equal(control.value,'detail');
+assert.match(app.innerHTML,/业务服务连接中断/);assert.match(app.innerHTML,/最后一次 GET 失败/);
+assert.doesNotMatch(app.innerHTML,/请修正规则|旧的 POST 错误/);
+assert.equal(app.inert,false);assert.equal(control.disabled,false);
+assert.throws(()=>run("buildPlanExport({selectedMonths:['2026-10']})"),/最后一次 GET 失败/);
+await run('renderPage()');
+assert.match(app.innerHTML,/业务服务连接中断/,'A regular render preserves the connection error kind.');
+assert.doesNotMatch(app.innerHTML,/请修正规则/);
+
+// Once polling reconnects, the authoritative committed mode replaces the old scope.
+status={status:'absent',generation_view:serverState.generation_view};
+await run('pollWorkbookStatus()');
+assert.equal(run('generationMode()'),'summary');
+assert.equal(run('generationViewError'),'');
+assert.match(app.innerHTML,/汇总代际计划由成员单代际自动相加，只读/);
+assert.doesNotMatch(app.innerHTML,/业务服务连接中断|代际范围暂不可用/);
+
+// Configuration failures are not connection retries and must replace the old POST error.
+const readsBeforeRuleFailure=reads;
+post=async()=>{
+  readFailures=[ruleFailure('恢复读取发现新的汇总规则配置错误')];
+  throw connectionFailure('旧的写入网络错误');
+};
+await run("changeGenerationMode('detail',control)");
+assert.equal(reads,readsBeforeRuleFailure+1,'Do not retry a confirmed rule/configuration error.');
+assert.match(app.innerHTML,/代际范围暂不可用/);assert.match(app.innerHTML,/恢复读取发现新的汇总规则配置错误/);
+assert.match(app.innerHTML,/请修正规则/);assert.doesNotMatch(app.innerHTML,/旧的写入网络错误|业务服务连接中断/);
+status={status:'absent',generation_view:serverState.generation_view};
+await run('pollWorkbookStatus()');
+assert.equal(run('generationViewError'),'');
+
+// An unfinished inline maintenance draft must survive a rejected selector change.
+const beforeDraftRequests=requests.length;
+run("gridDraft={owner:'未保存草稿',rows:new Map([['member',{values:{'2026-10':'123'}}]])}");
+const draft=run('gridDraft');control.value='detail';
+await assert.rejects(run("changeGenerationMode('detail',control)"),/保存|取消/);
+assert.equal(requests.length,beforeDraftRequests,'Do not submit settings or reload while an edit draft exists.');
+assert.equal(run('gridDraft'),draft);assert.equal(run("gridDraft.rows.get('member').values['2026-10']"),'123');
+assert.equal(control.value,'summary');assert.equal(app.inert,false);
+run('gridDraft=null');
+
+// The real transport distinguishes network/truncated JSON failures from backend errors.
+context.fetch=async()=>{throw new TypeError('Failed to fetch');};
+await assert.rejects(run("originalAPI('/api/state')"),error=>error.connection===true);
+context.fetch=async()=>({ok:true,status:200,json:async()=>{throw new SyntaxError('Unexpected end of JSON input');}});
+await assert.rejects(run("originalAPI('/api/state')"),error=>error.connection===true);
+context.fetch=async()=>({ok:false,status:400,json:async()=>({error:'明确的汇总规则错误'})});
+await assert.rejects(run("originalAPI('/api/state')"),error=>error.status===400&&!error.connection&&/明确的汇总规则错误/.test(error.message));
+console.log('PASS: generation switching recovers lost responses without replaying writes, preserves edit drafts, distinguishes connection/rule errors and restores authoritative scopes.');

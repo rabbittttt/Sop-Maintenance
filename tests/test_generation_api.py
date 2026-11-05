@@ -49,7 +49,12 @@ class GenerationAPITest(unittest.TestCase):
         return result
 
     def test_switch_syncs_before_and_after_mode_change(self):
-        code, result = self.request("/api/settings", {"generation_mode": "summary"})
+        with self.assertLogs("sop", level="INFO") as messages:
+            code, result = self.request("/api/settings", {"generation_mode": "summary"})
+        phases = [line for line in messages.output if "generation_switch" in line]
+        self.assertEqual(len(phases), 4)
+        for phase, message in zip(("begin", "input_checked", "mode_saved", "complete"), phases):
+            self.assertIn("phase=" + phase, message)
         self.assertEqual(code, 200, result)
         self.assertEqual(result["settings"]["generation_mode"], "summary")
         self.assertEqual(self.sync.calls, 2)

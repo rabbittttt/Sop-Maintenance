@@ -25,7 +25,12 @@ async function serviceFetch(path, options = {}, writeProbe = false) {
   const method = (options.method || 'GET').toUpperCase();
   const mutating = !['GET','HEAD'].includes(method);
   if (mutating && !(writeProbe && path === '/api/write-access')) requireWrite();
-  const response = await fetch(serviceUrl(path), {credentials:'same-origin',...options});
+  let response;
+  try { response = await fetch(serviceUrl(path), {credentials:'same-origin',...options}); }
+  catch (cause) {
+    const error = new Error('无法连接SOP业务服务，请确认计划工作台仍在运行后重试。');
+    error.connection = true; error.cause = cause; throw error;
+  }
   if (mutating && response.status === 403 && access.gateway) {
     access.canWrite = false; access.message = readOnlyMessage; applyAccessControls();
     if (!writeProbe) {const error = new Error(readOnlyMessage);error.definite = true;throw error;}
@@ -106,7 +111,7 @@ let expanded = new Set(), allExpanded = false, selected = null, snapshotList = [
 let planIndex = new Map(), salesIndex = new Map(), shipmentIndex = new Map();
 let owner = localStorage.getItem('sop-owner') || '';
 let matchMonth = '', matchProduct = '', comparison = null, activeRequest = 0;
-let generationSwitchPending = false, generationViewError = '';
+let generationSwitchPending = false, generationViewError = '', generationErrorKind = 'rules';
 let gridDraft=null, viewsRestored=false, viewNameDraft=null;
 const modelPlanLabel='车型总量（不分版本）';
 const isModelPlan=p=>p?.plan_level==='model'||p?.version===modelPlanLabel;
@@ -241,8 +246,16 @@ function dateText(t) { return t ? String(t).replace('T',' ').replace(/\.\d+/,'')
 function toast(msg, error = false) { const el = $('#toast'); el.textContent = msg; el.className = `toast visible ${error?'error':''}`; clearTimeout(toast.timer); toast.timer = setTimeout(()=>el.className='toast',5000); }
 async function api(path, body) {
   const response = await serviceFetch(path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || data.message || `请求失败（${response.status}）`);
+  let data;
+  try { data = await response.json(); }
+  catch (cause) {
+    const error = new Error(`业务服务响应未能完整读取${response.status?`（${response.status}）`:''}，请确认连接和服务状态后重试。`);
+    error.connection = true; error.status = response.status; error.cause = cause; throw error;
+  }
+  if (!response.ok) {
+    const error = new Error(data.error || data.message || `请求失败（${response.status}）`);
+    error.status = response.status; throw error;
+  }
   return data;
 }
 function indexData() {
@@ -252,7 +265,7 @@ function indexData() {
 }
 async function load(render = true) {
   if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');
-  const freshState=await api('/api/state');if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');state=freshState;generationViewError=state.generation_view?.error||'';indexData();restoreInitialView();
+  const freshState=await api('/api/state');if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');state=freshState;generationViewError=state.generation_view?.error||'';generationErrorKind='rules';indexData();restoreInitialView();
   target ||= state.current_month; matchMonth ||= shift(state.current_month,-1); metric = 'locked_orders';
   const ob = $('#owner-btn'); if (ob) ob.textContent = owner || '设置维护人';
   if(render) await renderPage();
@@ -265,9 +278,20 @@ function generationStatusChanged(view) {
   const previous=state?.generation_view||{};
   return ['mode','rule_signature','error'].some(field=>(view[field]||'')!==(previous[field]||''));
 }
-function showGenerationError(message) {
-  generationViewError=message;
-  if(page!=='history')$('#app').innerHTML=`<section class="card empty-state" role="alert"><h1>代际范围暂不可用</h1><p>${esc(message)}</p><p>请修正规则后点击“刷新数据”；页面也会自动重试。</p></section>`;
+function showGenerationError(message,kind=generationErrorKind) {
+  generationViewError=message;generationErrorKind=kind;
+  const title=kind==='connection'?'业务服务连接中断':'代际范围暂不可用';
+  const guidance=kind==='connection'?'请确认计划工作台服务仍在运行，连接恢复后点击“刷新数据”；页面也会自动重试。确认当前口径前暂停编辑。':'请修正规则后点击“刷新数据”；页面也会自动重试。';
+  if(page!=='history')$('#app').innerHTML=`<section class="card empty-state" role="alert"><h1>${title}</h1><p>${esc(message)}</p><p>${guidance}</p></section>`;
+}
+async function reloadGenerationState() {
+  for(let attempt=0;attempt<3;attempt++) {
+    try { await load();return; }
+    catch(error) {
+      if(!error.connection||attempt===2)throw error;
+      await new Promise(resolve=>setTimeout(resolve,400*(attempt+1)));
+    }
+  }
 }
 function generationWarnings() {
   const notes=(state.generation_view?.warnings||[]).map(item=>typeof item==='string'?item:item.message).filter(Boolean);
@@ -277,6 +301,7 @@ function generationWarnings() {
 async function changeGenerationMode(value,control) {
   requireWrite();
   if(generationSwitchPending)return;
+  if(gridDraft){control.value=generationMode();throw new Error('请先保存或取消表内修改，再切换车型口径');}
   if(!['detail','summary'].includes(value))throw new Error('请选择单代际或汇总代际');
   if(value===generationMode())return;
   generationSwitchPending=true;control.disabled=true;
@@ -291,9 +316,14 @@ async function changeGenerationMode(value,control) {
   } catch(error) {
     // A lost response can follow a successful save. Re-read the authoritative
     // mode before showing another editable table or restoring the selector.
-    try { await load(); }
-    catch { showGenerationError('无法确认当前代际范围，请刷新重试。'+error.message); }
-    toast(error.message,true);
+    try {
+      await reloadGenerationState();
+      if(error.connection&&generationMode()===value)toast(`已重新连接并确认当前口径为${generationModeLabel()}`);
+      else toast(error.message,true);
+    } catch(recoveryError) {
+      showGenerationError('无法确认当前代际范围，请刷新重试。'+recoveryError.message,recoveryError.connection?'connection':'rules');
+      toast(recoveryError.message,true);
+    }
   } finally {
     generationSwitchPending=false;control.disabled=!access.canWrite;control.value=generationMode();
     app.inert=false;app.removeAttribute('aria-busy');
@@ -981,7 +1011,7 @@ async function pollWorkbookStatus() {
     const sync=await api('/api/plan-workbook/status');if(gridDraft)return;const previous=state.workbook_sync||{},view=sync.generation_view;
     if(view?.error) {
       state.generation_view=view;
-      showGenerationError(view.error);
+      showGenerationError(view.error,'rules');
       return;
     }
     if(generationViewError||generationStatusChanged(view)||sync.last_sync!==previous.last_sync||sync.status!==previous.status||sync.message!==previous.message||JSON.stringify(sync.source_refresh||{})!==JSON.stringify(state.source_refresh||{})) {
