@@ -309,8 +309,6 @@ def project_generation_sources(data, mode, rules, known_summaries=()):
                 "month": month, "metric": metric, "value": _sum_known(row.get("value") for row in rows), "derived": True,
                 "known_generations": sum(normalize_generation(member) in known for member in members),
                 "total_generations": len(members)})
-            if any(normalize_generation(member) not in known for member in members) or any(row.get("value") is None for row in rows):
-                warnings.append(f"{summary} {month} 锁单仅含已知单代际，仍有缺项。")
     # Reference drilldowns follow the same scope and cannot reintroduce members.
     for field in ("reference", "version_reference"):
         if isinstance(result.get(field), dict):

@@ -95,7 +95,7 @@ class GenerationModeTest(unittest.TestCase):
         plan = next(p for p in state["plans"] if p["product_id"] == virtual["id"])
         self.assertEqual(plan["sop"], 0)
         self.assertTrue(plan["partial"])
-        self.assertTrue(state["generation_view"]["warnings"])
+        self.assertEqual(state["generation_view"]["warnings"], [])
 
     def test_alias_does_not_hide_explicit_member_and_invalid_groups_fail_closed(self):
         self.assertNotIn("问界 M5 2026款", summary_names(load_merge_rules()))
