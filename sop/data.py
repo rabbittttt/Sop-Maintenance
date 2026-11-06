@@ -475,18 +475,22 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
 
 
 LOCK_BASIS_OPTIONS = {"unconfirmed", "source_version_quantity", "model_lock_row"}
+# Business basis already confirmed: version/quantity is version locks; the
+# separate delivery-lock row remains the model total. Fresh deployments must
+# not depend on a local, Git-ignored confirmation file to show version locks.
+DEFAULT_LOCK_BASIS = "source_version_quantity"
 
 
 def _resolve_lock_basis(explicit=None, settings_path=None):
-    """A user-confirmed source interpretation persists across ordinary refreshes."""
+    """Use the confirmed default unless a deployment explicitly overrides it."""
     basis = explicit
     if basis is None:
         settings_path = Path(settings_path) if settings_path else runtime_data_directory(ROOT) / "source_settings.json"
         if settings_path.is_file():
             settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
-            basis = settings.get("version_lock_basis", "unconfirmed")
+            basis = settings.get("version_lock_basis", DEFAULT_LOCK_BASIS)
         else:
-            basis = "unconfirmed"
+            basis = DEFAULT_LOCK_BASIS
     if basis not in LOCK_BASIS_OPTIONS:
         raise ValueError("version_lock_basis 必须为 unconfirmed、source_version_quantity 或 model_lock_row")
     return basis

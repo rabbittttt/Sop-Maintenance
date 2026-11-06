@@ -1,6 +1,7 @@
 """Regression checks: source metric ambiguity must not become version actuals."""
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -158,13 +159,71 @@ class SalesMetricSafetyTests(unittest.TestCase):
     def test_persistent_confirmation_and_explicit_override(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "source_settings.json"
-            self.assertEqual(sop_data._resolve_lock_basis(settings_path=path), "unconfirmed")
+            self.assertEqual(sop_data._resolve_lock_basis(settings_path=path), "source_version_quantity")
+            path.write_text("{}", encoding="utf-8")
+            self.assertEqual(sop_data._resolve_lock_basis(settings_path=path), "source_version_quantity")
             path.write_text(json.dumps({"version_lock_basis": "source_version_quantity"}), encoding="utf-8")
             self.assertEqual(sop_data._resolve_lock_basis(settings_path=path), "source_version_quantity")
             self.assertEqual(sop_data._resolve_lock_basis("unconfirmed", path), "unconfirmed")
+            self.assertEqual(sop_data._resolve_lock_basis("model_lock_row", path), "model_lock_row")
             path.write_text('{"version_lock_basis": "typo"}', encoding="utf-8")
             with self.assertRaises(ValueError):
                 sop_data._resolve_lock_basis(settings_path=path)
+
+    def test_new_runtime_without_settings_keeps_version_locks_across_refreshes(self):
+        source, models = fixture()
+        original_source, original_models = copy.deepcopy(source), copy.deepcopy(models)
+        with tempfile.TemporaryDirectory(prefix="sop-version-lock-default-") as directory:
+            root = Path(directory)
+            data_dir, input_dir = root / "runtime", root / "sales-input"
+            settings = data_dir / "source_settings.json"
+            cache = data_dir / "sales.json"
+            self.assertFalse(settings.exists())
+            with patch.dict(os.environ, {"SOP_DATA_DIR": str(data_dir), "SOP_SOURCE_DIR": str(input_dir)}), \
+                 patch.object(sop_data, "_extract_version_reference", return_value=source), \
+                 patch.object(sop_data, "_model_monthly_locks", return_value=models):
+                for attempt in range(2):
+                    with self.subTest(refresh=attempt + 1):
+                        result = sop_data.refresh(as_of="2026-11-06")
+                        self.assertEqual(result["meta"]["version_lock_basis"], "source_version_quantity")
+                        self.assertEqual(result["meta"]["source_directory"], str(input_dir.resolve()))
+                        self.assertEqual([(row["product_id"], row["value"], row["source_cell"])
+                                          for row in result["sales"]],
+                                         [("stable-max", 0, "D19"), ("stable-ultra", 17, "D20")])
+                        self.assertTrue(all(row["metric"] == "locked_orders" and not row["is_allocated"]
+                                            for row in result["sales"]))
+                        self.assertEqual([(row["value"], row["source_cell"]) for row in result["model_sales"]],
+                                         [(23, "D2")])
+                        self.assertEqual([p["id"] for p in result["products"]], ["stable-max", "stable-ultra"])
+                        self.assertEqual(result["meta"]["metric_coverage"]["locked_orders"]["monthly_total"], 17)
+                        saved = json.loads(cache.read_text(encoding="utf-8"))
+                        self.assertEqual(saved["sales"], result["sales"])
+                        self.assertEqual(saved["model_sales"], result["model_sales"])
+                        self.assertFalse(cache.with_suffix(".json.tmp").exists())
+            self.assertFalse(settings.exists(), "Default behavior does not require creating a local confirmation file")
+        self.assertEqual(source, original_source)
+        self.assertEqual(models, original_models)
+
+    def test_explicit_saved_lock_basis_still_controls_new_runtime_refresh(self):
+        source, models = fixture()
+        with tempfile.TemporaryDirectory(prefix="sop-version-lock-explicit-") as directory:
+            root = Path(directory)
+            settings = root / "source_settings.json"
+            with patch.dict(os.environ, {"SOP_DATA_DIR": str(root)}), \
+                 patch.object(sop_data, "_extract_version_reference", return_value=source), \
+                 patch.object(sop_data, "_model_monthly_locks", return_value=models):
+                for basis in ("model_lock_row", "unconfirmed"):
+                    with self.subTest(basis=basis):
+                        settings.write_text(json.dumps({"version_lock_basis": basis}), encoding="utf-8")
+                        result = sop_data.refresh(as_of="2026-11-06")
+                        self.assertEqual(result["meta"]["version_lock_basis"], basis)
+                        self.assertEqual([row["value"] for row in result["sales"]], [None, None])
+                        self.assertEqual(result["model_sales"][0]["value"], 23)
+                before = (root / "sales.json").read_bytes()
+                settings.write_text('{"version_lock_basis": "typo"}', encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    sop_data.refresh(as_of="2026-11-06")
+                self.assertEqual((root / "sales.json").read_bytes(), before)
 
     def test_default_refresh_uses_configured_source_directory(self):
         source, models = fixture()
