@@ -255,8 +255,15 @@ class PlainModelTableTest(unittest.TestCase):
         sheet.merge_cells("A2:A3")
         self.assert_bad(sheet, "品牌不能填写公式")
 
+    def test_integer_text_is_read_as_the_same_nonnegative_quantity(self):
+        for text, expected in (("100", 100), (" 00100 ", 100), ("0", 0), ("0" * 5000, 0), ("1000000000000", 10**12)):
+            with self.subTest(text=text[:20]):
+                result = self.parse_both(self.sheet([["品牌", "车型", "2026-10"], ["智界", "Future 2027款", text]]))
+                self.assertEqual(result[0]['plans'][0]['sop'], expected)
+                self.assertIs(type(result[0]['plans'][0]['sop']), int)
+
     def test_invalid_quantities_are_not_coerced(self):
-        for amount in (True, -1, 1.5, "100", "2027-01", "1月"):
+        for amount in (True, -1, 1.5, "1.5", "-1", "1e3", "2027-01", "1月"):
             with self.subTest(amount=amount):
                 self.assert_bad(self.sheet([["品牌", "车型", "2026-10"], ["智界", "Future 2027款", amount]]), "非负整数")
 

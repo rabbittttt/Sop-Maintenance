@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import re
 import xml.etree.ElementTree as ET
+from datetime import date, datetime
 
 from .store import ValidationError, catalog_name_key, display_version, text_field
 from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
@@ -12,9 +13,29 @@ from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
 def _quantity(value):
     if value is None or value == "":
         return None
+    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip()):
+        # Excel can preserve a manually entered integer as a text cell. Accept
+        # only decimal digits, without evaluating formulas or parsing dates.
+        digits = value.strip().lstrip("0") or "0"
+        if len(digits) <= 13:
+            value = int(digits)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value > 10**12 or int(value) != value:
         raise ValidationError("SOP 数量必须为非负整数，空白表示未填写；不能填写公式。")
     return int(value)
+
+
+def _input_quantity(value, sheet, number, column, label, month):
+    """Attach the visible input address when a quantity cannot be imported."""
+    try:
+        return _quantity(value)
+    except ValidationError as error:
+        from openpyxl.utils import get_column_letter
+        kind = ("公式" if isinstance(value, str) and value.lstrip().startswith("=")
+                else "文本" if isinstance(value, str)
+                else "日期或时间" if isinstance(value, (date, datetime))
+                else "非整数或超出范围的值")
+        address = f"{sheet.title}!{get_column_letter(column)}{number}"
+        raise ValidationError(f"{address}（{label}，{month}）：{error} 检测到{kind}。") from error
 
 
 def _blank(value):
@@ -199,8 +220,8 @@ def parse_inline_sheet(sheet, manifest):
         new_rows.extend(r for r in matches if r is not unchanged[0])
     for number, row, original in locks:
         for col in month_columns:
-            raw = value(row, col["column"])
-            if isinstance(raw, bool) or raw != _blank(original.get("values", {}).get(col["month"])):
+            raw = _input_quantity(value(row, col["column"]), sheet, number, col["column"], "锁单参考", col["month"])
+            if raw != _blank(original.get("values", {}).get(col["month"])):
                 raise ValidationError(f"第 {number} 行是锁单参考数，不能修改；请只修改 SOP 计划行。")
     values, entries, catalog_changes, catalog_values = [], [], [], {}
     for pid, product in products.items():
@@ -228,21 +249,25 @@ def parse_inline_sheet(sheet, manifest):
         original = original_plans[pid]
         allowed = set() if product.get("read_only") else set(manifest["editable_months_by_product"].get(pid, []))
         for col in month_columns:
-            month, raw = col["month"], value(candidate["row"], col["column"])
+            month = col["month"]
+            raw = _input_quantity(value(candidate["row"], col["column"]), sheet, candidate["number"], col["column"],
+                                  f"{product['brand']} {product['model']} / {product['version']}", month)
             if month not in allowed:
                 if raw != _blank(original.get("values", {}).get(month)):
                     raise ValidationError(f"第 {candidate['number']} 行 {month} 不可维护，请恢复原计划值。")
                 continue
-            values.append({"product_id": pid, "month": month, "sop": _quantity(raw)})
+            values.append({"product_id": pid, "month": month, "sop": raw})
     for candidate in new_rows:
         plans = []
         for col in month_columns:
-            month, raw = col["month"], value(candidate["row"], col["column"])
+            month = col["month"]
+            raw = _input_quantity(value(candidate["row"], col["column"]), sheet, candidate["number"], col["column"],
+                                  f"{candidate['labels']['brand']} {candidate['labels']['model']}", month)
             if month not in allowed_new:
                 if raw is not None:
                     raise ValidationError(f"新增行的 {month} 尚未开放，不能填写计划。")
                 continue
-            plans.append({"month": month, "sop": _quantity(raw), "baseline_sop": None})
+            plans.append({"month": month, "sop": raw, "baseline_sop": None})
         entries.append({**candidate["labels"], "plans": plans,
                         **({"parent_generation": candidate["parent_generation"]} if candidate.get("parent_generation") else {})})
     return {"values": values, "entries": entries, "catalog_changes": catalog_changes,
@@ -316,7 +341,8 @@ def parse_model_input_sheet(sheet, manifest):
                 changed = []
                 for col in months:
                     month = col["month"]
-                    amount = _quantity(value(row, col["column"]))
+                    amount = _input_quantity(value(row, col["column"]), sheet, number, col["column"],
+                                             f"{item['brand']} {item['model']} 车型总量", month)
                     displayed = item["display_values"][month]
                     if month not in allowed:
                         if amount != displayed:
@@ -336,7 +362,8 @@ def parse_model_input_sheet(sheet, manifest):
                         raise ValidationError("锁单、合计和说明行的名称不能修改，请只维护车型 SOP 月计划。")
                 if original.get("metric") == "锁单数" and original["kind"] in {"product", "model_total"}:
                     for col in months:
-                        if _quantity(value(row, col["column"])) != original.get("values", {}).get(col["month"]):
+                        raw = _input_quantity(value(row, col["column"]), sheet, number, col["column"], "锁单参考", col["month"])
+                        if raw != original.get("values", {}).get(col["month"]):
                             raise ValidationError(f"第 {number} 行是锁单参考数，不能修改；请只修改 SOP 计划行。")
                     if any(value(row, col["column"]) is not None for col in manifest["columns"] if col["kind"] == "year_total"):
                         raise ValidationError("锁单参考行不能填写年度 SOP 计划量。")
@@ -360,7 +387,9 @@ def parse_model_input_sheet(sheet, manifest):
         new_names.add(name)
         plans = []
         for col in months:
-            month, amount = col["month"], _quantity(value(row, col["column"]))
+            month = col["month"]
+            amount = _input_quantity(value(row, col["column"]), sheet, number, col["column"],
+                                     f"{labels['brand']} {labels['model']} 车型总量", month)
             if month not in allowed_new:
                 if amount is not None:
                     raise ValidationError(f"新增行的 {month} 尚未开放，不能填写计划。")

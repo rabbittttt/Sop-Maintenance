@@ -242,10 +242,22 @@ class WorkbookSyncTest(unittest.TestCase):
         self.assertEqual(self.sync.sync(choice="db")["status"], "synced")
         self.assertEqual(self.current()["sop"], 400)
 
+    def test_integer_text_cells_sync_as_numbers_without_duplicate_updates(self):
+        self.assertEqual(self.sync.sync()['status'], 'synced')
+        edit_cell(self.path, self.cell(), ' 0020 ')
+        edit_cell(self.path, self.cell('b'), '0')
+        self.assertEqual(self.sync.sync()['status'], 'synced')
+        self.assertEqual((self.current()['sop'], self.current('b')['sop']), (20, 0))
+        self.assertIs(type(self.current()['sop']), int)
+        revision = self.current('b')['revision']
+        edit_cell(self.path, self.cell('b'), '000')
+        self.assertEqual(self.sync.sync()['status'], 'synced')
+        self.assertEqual(self.current('b')['revision'], revision)
+
     def test_invalid_cells_and_baseline_fail_without_partial_import(self):
         self.sync.sync()
         pristine = self.path.read_bytes()
-        for bad, formula in [(-1, False), (2.5, False), ("5", False), ("1+2", True)]:
+        for bad, formula in [(-1, False), (2.5, False), ("5台", False), ("1+2", True)]:
             with self.subTest(bad=bad):
                 self.path.write_bytes(pristine)
                 edit_cell(self.path, self.cell(), 20)

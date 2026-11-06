@@ -7,7 +7,6 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import math
 import os
 import subprocess
 import threading
@@ -336,11 +335,9 @@ def _inline_layout(products, months, editable_months, current_month, plans=None)
 
 
 def _cell_quantity(value):
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value > 10**12 or int(value) != value:
-        raise ValidationError("SOP 数量必须为非负整数，空白表示未填写；不能填写公式。")
-    return int(value)
+    # Keep legacy and current workbooks consistent when Excel stores digits as text.
+    from .table import _quantity
+    return _quantity(value)
 
 
 def _key(pid, month):
