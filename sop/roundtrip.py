@@ -248,10 +248,10 @@ class PlanRoundtrip:
                 or any(value is not None and not isinstance(value, str) for value in row_parents)):
             raise ValidationError("导出代际层级标识不完整，请刷新后重试。")
         if not isinstance(ids, list) or len(ids) != len(clean["rows"]):
-            raise ValidationError("导出行缺少稳定版本编码，请刷新看板后重试。")
+            raise ValidationError("导出行标识不完整，请按Ctrl+F5刷新看板后重试；不要求版本明细。")
         if (not isinstance(selected_ids, list) or not selected_ids or len(selected_ids) > 5000
                 or any(not isinstance(pid, str) for pid in selected_ids) or len(set(selected_ids)) != len(selected_ids)):
-            raise ValidationError("导出范围缺少版本编码或包含重复版本，请刷新看板后重试。")
+            raise ValidationError("导出范围标识不完整或重复，请刷新看板后重试；不要求版本明细。")
         with self._lock():
             self._sync_before()
             with self.store.lock:

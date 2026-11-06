@@ -342,12 +342,15 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     self._json({"canWrite": True})
                     return
                 elif path == "/api/plans/export-xlsx":
-                    context = None
-                    if "row_product_ids" in body:
-                        body, context = roundtrip_service().prepare(body)
-                    with plan_export.generate(body, **({"roundtrip": context} if context is not None else {})) as exported:
-                        if context is not None:
-                            roundtrip_service().register(exported.path, context)
+                    if "row_product_ids" not in body:
+                        raise ValidationError("当前页面的导出格式较旧，请按Ctrl+F5刷新看板后重试。无需勾选或填写版本明细。")
+                    service = roundtrip_service()
+                    body, context = service.prepare(body)
+                    with plan_export.generate(body, roundtrip=context) as exported:
+                        try:
+                            service.register(exported.path, context)
+                        except ValidationError as error:
+                            raise ExportError("生成的计划表未通过回导校验，请更新并重启工作台后重试。") from error
                         encoded = exported.path.read_bytes()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

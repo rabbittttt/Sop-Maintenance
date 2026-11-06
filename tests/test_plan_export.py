@@ -168,14 +168,33 @@ class NoBusinessAccess:
         raise AssertionError("Export must not access business state: " + name)
 
 
+class BoundExportStub:
+    def __init__(self):
+        self.prepared = 0
+        self.registered = 0
+
+    def prepare(self, body):
+        clean = dict(body)
+        clean.pop("row_product_ids")
+        self.prepared += 1
+        return clean, {"token": "transport-test"}
+
+    def register(self, path, context):
+        if not path.is_file() or context != {"token": "transport-test"}:
+            raise AssertionError("Download must be registered before delivery")
+        self.registered += 1
+
+
 class ExportHTTPTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.service = PlanExport(writer=fixture_writer, temp_root=self.root)
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+        self.roundtrip = BoundExportStub()
         self.http.RequestHandlerClass = make_handler(NoBusinessAccess(), self.root, self.http.server_port,
-                                                    workbook_sync=NoBusinessAccess(), plan_export=self.service)
+                                                    workbook_sync=NoBusinessAccess(), plan_export=self.service,
+                                                    plan_roundtrip=self.roundtrip)
         self.thread = threading.Thread(target=lambda: self.http.serve_forever(poll_interval=0.02), daemon=True)
         self.thread.start()
 
@@ -185,7 +204,7 @@ class ExportHTTPTest(unittest.TestCase):
 
     def request(self, body=None, headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.http.server_port, timeout=5)
-        wire_body = None if body is NO_BODY else json.dumps(body if body is not None else payload())
+        wire_body = None if body is NO_BODY else json.dumps(body if body is not None else {**payload(), "row_product_ids": [None, None, "p1"]})
         connection.request("POST", "/api/plans/export-xlsx", wire_body,
                            headers or {"Content-Type": "application/json"})
         response = connection.getresponse()
@@ -193,13 +212,22 @@ class ExportHTTPTest(unittest.TestCase):
         connection.close()
         return result
 
-    def test_download_is_attachment_without_db_or_sync_access_and_cleanup(self):
+    def test_download_is_registered_attachment_and_transport_cleans_up(self):
         code, headers, data = self.request()
         self.assertEqual(code, 200)
         self.assertEqual(headers["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         self.assertIn("attachment;", headers["Content-Disposition"])
         self.assertIn("filename*=UTF-8''", headers["Content-Disposition"])
         self.assertTrue(data.startswith(b"PK"))
+        self.assertEqual(self.roundtrip.registered, 1)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_old_page_cannot_download_an_unmarked_readonly_workbook(self):
+        code, headers, data = self.request(payload())
+        self.assertEqual(code, 400)
+        self.assertNotIn("Content-Disposition", headers)
+        self.assertIn("Ctrl+F5", json.loads(data)["error"])
+        self.assertEqual((self.roundtrip.prepared, self.roundtrip.registered), (0, 0))
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_request_origin_types_shape_and_size_rejections_are_json(self):
