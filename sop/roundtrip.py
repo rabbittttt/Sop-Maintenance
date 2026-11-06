@@ -674,7 +674,10 @@ class PlanRoundtrip:
         # Business commit succeeded; a locked Excel file must not invite a retry.
         if self.workbook_sync is not None:
             try:
-                after = self.workbook_sync.sync()
+                # A successful Excel import explicitly starts file maintenance.
+                # Build the canonical workbook if absent; existing workbooks
+                # still follow normal synchronization and saved-edit checks.
+                after = self.workbook_sync.sync(force_export=not self.workbook_sync.path.exists())
             except Exception as error:
                 after = {"status": "error", "message": str(error)}
             response["workbook_sync"] = after

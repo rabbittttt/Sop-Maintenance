@@ -126,7 +126,7 @@ class RoundtripHTTPTest(unittest.TestCase):
 
 
 class MissingPrimaryWorkbookHTTPTest(unittest.TestCase):
-    def test_download_and_reimport_without_creating_maintenance_workbook(self):
+    def test_download_without_maintenance_then_create_on_successful_reimport(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "sales.json"
@@ -176,9 +176,11 @@ class MissingPrimaryWorkbookHTTPTest(unittest.TestCase):
                 status, content = request("/api/plans/import-xlsx", {
                     "filename": "download.xlsx", "content_base64": base64.b64encode(exported.read_bytes()).decode()})
                 self.assertEqual(status, 200, content[:500])
-                self.assertEqual(json.loads(content)["imported"], 1)
+                result = json.loads(content)
+                self.assertEqual(result["imported"], 1)
+                self.assertEqual(result["workbook_sync"]["status"], "synced", result)
                 self.assertEqual(store.db.execute("SELECT sop FROM plans WHERE product_id='a' AND month='2026-10'").fetchone()[0], 41)
-                self.assertFalse(workbook_path.exists())
+                self.assertTrue(workbook_path.is_file())
 
                 connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
                 try:

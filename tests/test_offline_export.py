@@ -132,7 +132,7 @@ class OfflineExportTest(unittest.TestCase):
             "SELECT sop FROM plans WHERE product_id='a' AND month='2026-10'").fetchone()[0], 41)
         self.assertEqual(context["plan_values_by_product"]["a"]["2026-10"], 10)
 
-    def test_first_web_template_exports_and_imports_without_creating_maintenance_file(self):
+    def test_first_web_template_creates_maintenance_only_after_successful_import(self):
         maintenance = self.root / "input_file" / "SOP计划维护.xlsx"
         sync = WorkbookSync(self.store, maintenance, auto_create=False)
         self.service = PlanRoundtrip(self.store, sync)
@@ -146,7 +146,8 @@ class OfflineExportTest(unittest.TestCase):
         result = self.service.import_content(self.path.read_bytes())
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["imported"], 1)
-        self.assertFalse(maintenance.exists())
+        self.assertEqual(result["workbook_sync"]["status"], "synced", result)
+        self.assertTrue(maintenance.is_file())
         self.assertEqual(self.store.db.execute(
             "SELECT sop FROM plans WHERE product_id='a' AND month='2026-10'").fetchone()[0], 41)
 
