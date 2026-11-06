@@ -816,7 +816,7 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 .grid-row-labels.version-labels { display:flex; align-items:center; }
 .grid-row-labels.version-labels label { flex:1; }
 .grid-row-labels .grid-remove { min-width:42px; }
-.grid-row-actions { flex-wrap:nowrap; }
+.grid-row-actions { flex-wrap:wrap; }
 .grid-row-actions .button { padding:3px 5px; }
 .annual-sheet.grid-editing .table-scroll { max-height:calc(100vh - 228px); }
 @media(max-width:700px) {

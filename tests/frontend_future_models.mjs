@@ -25,13 +25,32 @@ const source=readFileSync(new URL('../web/app.js',import.meta.url),'utf8');
 vm.runInContext(source.split("document.addEventListener('click'")[0],context);
 const run=code=>vm.runInContext(code,context),plain=value=>JSON.parse(JSON.stringify(value));
 run("let searchTimer;state=initial;owner='测试';metric='locked_orders';toast=()=>{};openDialog=()=>{throw Error('unexpected modal')};indexData();planning()");
-assert.match(nodes.get('#app').innerHTML,/data-action="add-model"/,'New models have a visible entry before entering maintenance.');
-assert.equal(run("writeActions.has('add-model')"),true);
+const html=()=>nodes.get('#app').innerHTML;
+const addButtonCount=markup=>(markup.match(/data-action="grid-add"/g)||[]).length;
+const assertInlineAdditions=expected=>{
+  const markup=html();
+  const titlebar=markup.slice(0,markup.indexOf('<div class="annual-toolbar"'));
+  const toolbar=markup.match(/<section class="grid-toolbar"[\s\S]*?<\/section>/)?.[0]||'';
+  assert.doesNotMatch(markup,/data-action="add-model"/);
+  assert.equal(addButtonCount(titlebar),0,'The page header has no duplicate model-creation entry.');
+  assert.equal(addButtonCount(toolbar),0,'The maintenance toolbar has no duplicate entry.');
+  const modelRows=[...markup.matchAll(/<tr\b[^>]*class="[^"]*\bmodel-row\b[^"]*"[^>]*>[\s\S]*?<\/tr>/g)].map(match=>match[0]).join('');
+  assert.equal(addButtonCount(modelRows),expected,'New models are added only from model summary rows.');
+  assert.equal(addButtonCount(markup),expected);
+};
+assert.doesNotMatch(html(),/data-action="(?:add-model|grid-add)"/,'Reading the table does not show model-creation buttons.');
+assert.equal(run("writeActions.has('add-model')"),false);
+assert.equal(run("writeActions.has('grid-add')"),true);
 run("brand='享界';model='已有车型 2026款';query='Max';planning()");
-await run("handleAction('add-model',{})");
-assert.match(nodes.get('#app').innerHTML,/data-new-row=/);
-assert.match(nodes.get('#app').innerHTML,/无锁单也可提前排量/);
-assert.equal((nodes.get('#app').innerHTML.match(/data-action="grid-add"/g)||[]).length,1);
+await run("handleAction('bulk-plan',{})");
+assertInlineAdditions(1);
+assert.match(html(),/data-new-model-group="享界\|已有车型 2026款"/);
+await run("handleAction('grid-add',{dataset:{newModelGroup:'享界|已有车型 2026款'}})");
+assert.equal(run("[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual).brand"),'享界','The new model inherits the current row brand.');
+assert.equal(run("[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual).model"),'','A new model does not reuse the old model name.');
+assert.match(html(),/data-new-row=/);
+assert.match(html(),/无锁单也可提前排量/);
+assertInlineAdditions(1);
 run("const newModel=[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual);newModel.brand='智界';newModel.model='筹备车型 2027款';newModel.values['2027-03']='123'");
 const payload=plain(run('gridPayload()'));
 assert.equal(payload.entries.length,1);assert.equal(payload.entries[0].plan_level,'model');
@@ -52,7 +71,8 @@ assert(!requests.some(r=>r.path.includes('plan-workbook')),'Creating a future mo
 
 // New Wenjie models remain discoverable even if the old display toggle was off.
 run("showWenjie=false;brand='享界';query='Max';model='已有车型 2026款';planning()");
-await run("handleAction('add-model',{})");
+await run("handleAction('bulk-plan',{})");
+await run("handleAction('grid-add',{dataset:{newModelGroup:'享界|已有车型 2026款'}})");
 run("const wenjie=[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual);wenjie.brand='问界';wenjie.model='筹备车型 2028款';wenjie.values['2027-04']='8'");
 const second=plain(run('gridPayload()'));
 serverState={...structuredClone(serverState),products:[...serverState.products,{...manual,id:'manual-wenjie',brand:'问界',model:'筹备车型 2028款'}],
@@ -62,8 +82,35 @@ await run('saveGrid()');
 assert.equal(run('showWenjie'),true);assert.equal(storage.get('sop-show-wenjie'),'true');
 assert.match(nodes.get('#app').innerHTML,/筹备车型 2028款/);
 
-// A fresh catalog can add its very first model through the same entry.
-run("state={...initial,products:[],plans:[]};gridDraft=null;indexData();planning()");
-await run("handleAction('add-model',{})");
-assert.equal(run('gridDraft.rows.size'),1);assert.equal(run('[...gridDraft.rows.values()][0].isModel'),true);
-console.log('PASS: visible future-model creation uses the inline table, accepts totals without sales/versions, preserves blank locks and clears stale filters.');
+// The current row brand wins over stale DOM data after an inline rename.
+run("state={...initial};gridDraft=null;hiddenRows={};brand='';model='';query='';indexData();planning();bulkPlan();gridChangeModel('享界|已有车型 2026款','brand','尊界')");
+await run("handleAction('grid-add',{dataset:{newModelGroup:'享界|已有车型 2026款',newModelBrand:'享界'}})");
+assert.equal(run("[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual).brand"),'尊界');
+
+// Expanding a summary shows one root entry, without duplicates on member rows.
+run("const fixtureSummaryName='享界 组合 2027款汇总';state={...initial,products:[{...initial.products[0],id:'summary-root',model:'组合 2027款',version:modelPlanLabel,plan_level:'model',summary_generation:fixtureSummaryName}],generation_members:{...initial.generation_members,products:[{...initial.products[0],id:'summary-child',parent_generation:fixtureSummaryName}]}};gridDraft=null;hiddenRows={};brand='';model='';query='';allExpanded=true;indexData();planning();bulkPlan()");
+assertInlineAdditions(1);
+assert.match(html(),/已有车型 2026款/,'The expanded member model remains present.');
+assert.match(html(),/data-new-model-group="享界\|组合 2027款"/);
+await run("handleAction('grid-add',{dataset:{newModelGroup:'享界|组合 2027款'}})");
+assert.equal(run("[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual).brand"),'享界');
+assert.equal(run("[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual).parent_generation"),undefined,'The new model stays independent of the member hierarchy.');
+run('allExpanded=false');
+
+// Empty, hidden and filtered catalogs keep exactly one entry inside the table.
+for(const setup of [
+  "state={...initial,products:[],plans:[]}",
+  "state={...initial};hiddenRows[rowViewKey('brand','享界')]='享界'",
+  "state={...initial};hiddenRows[rowViewKey('model','享界|已有车型 2026款')]='已有车型 2026款'",
+  "state={...initial};brand='享界';query='没有匹配项'",
+]){
+  run("gridDraft=null;hiddenRows={};brand='';model='';query='';"+setup+";indexData();planning()");
+  assert.doesNotMatch(html(),/data-action="(?:add-model|grid-add)"/);
+  await run("handleAction('bulk-plan',{})");
+  assertInlineAdditions(1);
+  assert.match(html(),/车型汇总/);
+  await run("handleAction('grid-add',{dataset:{newModelBrand:brand}})");
+  assert.equal(run("[...gridDraft.rows.values()].filter(r=>r.isNew&&!r.virtual).length"),1);
+  assert.equal(run("[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual).isModel"),true);
+}
+console.log('PASS: maintenance-only model-summary creation accepts future totals without sales/versions, preserves blank locks, clears stale filters and keeps a single table fallback.');
