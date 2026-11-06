@@ -19,6 +19,14 @@ def _quantity(value):
         digits = value.strip().lstrip("0") or "0"
         if len(digits) <= 13:
             value = int(digits)
+    if isinstance(value, float) and math.isfinite(value) and 0 <= value <= 10**12:
+        nearest = round(value)
+        # Excel may serialize an integer as its adjacent binary float (e.g.
+        # 2999.9999999999995 for 3000). Accept only that one-step noise, capped
+        # in absolute size; genuine fractions and nonzero values near zero
+        # must still fail instead of being rounded into a plan quantity.
+        if nearest > 0 and abs(value - nearest) <= min(math.ulp(value), math.ulp(float(nearest)), 1e-9):
+            value = nearest
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value > 10**12 or int(value) != value:
         raise ValidationError("SOP 数量必须为非负整数，空白表示未填写；不能填写公式。")
     return int(value)

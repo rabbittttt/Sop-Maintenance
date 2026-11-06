@@ -254,6 +254,38 @@ class WorkbookSyncTest(unittest.TestCase):
         self.assertEqual(self.sync.sync()['status'], 'synced')
         self.assertEqual(self.current('b')['revision'], revision)
 
+    def test_one_ulp_excel_roundoff_syncs_once_and_preserves_other_plans(self):
+        self.save(sop=20, forecast=900)
+        self.save(pid="b", sop=75, forecast=30)
+        self.store.save_plans({"owner": "网页用户", "changes": [{"product_id": "a", "month": "2026-11",
+            "sop": 44, "forecast": 55, "revision": 0}]})
+        self.assertEqual(self.sync.sync()["status"], "synced")
+
+        def other_plans():
+            return [tuple(row) for row in self.store.db.execute(
+                "SELECT * FROM plans WHERE NOT (product_id='a' AND month='2026-10') ORDER BY product_id,month")]
+
+        before = other_plans()
+        saved = None
+        for attempt in range(2):
+            with self.subTest(save_number=attempt + 1):
+                address = self.cell()
+                edit_cell(self.path, address, 2999.9999999999995)
+                with zipfile.ZipFile(self.path) as archive:
+                    sheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+                raw_value = sheet.find(f".//{{{NS}}}c[@r='{address}']/{{{NS}}}v")
+                self.assertEqual(raw_value.text, "2999.9999999999995")
+                status = self.sync.sync()
+                self.assertEqual(status["status"], "synced", status)
+                current = self.current()
+                self.assertEqual((current["sop"], current["forecast"]), (3000, 900))
+                self.assertIs(type(current["sop"]), int)
+                if saved is None:
+                    saved = current
+                else:
+                    self.assertEqual(current, saved, "Saving the same roundoff must not create a new plan revision.")
+                self.assertEqual(other_plans(), before)
+
     def test_invalid_cells_and_baseline_fail_without_partial_import(self):
         self.sync.sync()
         pristine = self.path.read_bytes()
