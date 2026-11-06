@@ -49,6 +49,7 @@ class PresentationRevisionTest(unittest.TestCase):
                     sheet.merge_cells(start_row=1, start_column=1, end_row=1,
                                       end_column=expected["layout"]["sheets"][0]["visible_last_column"])
                     sheet["A1"] = "SOP 跨年计划（2026-01—2027-12）"
+                    sheet[address].number_format = '"¥"#,##0.00'
                     workbook.save(path)
                 finally:
                     workbook.close()
@@ -66,6 +67,8 @@ class PresentationRevisionTest(unittest.TestCase):
                 try:
                     self.assertEqual(refreshed["SOP计划"]["A1"].value, "SOP计划表")
                     self.assertEqual(refreshed["SOP计划"]["D1"].value, "2026-01—2027-12")
+                    self.assertEqual(refreshed["SOP计划"][address].number_format, "0")
+                    self.assertEqual(refreshed["SOP计划"][address].value, 41)
                     self.assertIn("A1:C1", {str(area) for area in refreshed["SOP计划"].merged_cells.ranges})
                 finally:
                     refreshed.close()

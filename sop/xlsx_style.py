@@ -98,7 +98,7 @@ def style_plan_row(sheet, *, row, kind, visible_last_column, columns,
         cell = sheet.cell(row, column)
         cell.border = GRID
         if column > identity_columns:
-            cell.number_format = "#,##0"
+            cell.number_format = "0"
             cell.alignment = Alignment(horizontal="right", vertical="center")
 
     if kind in {"product", "manual_entry"}:

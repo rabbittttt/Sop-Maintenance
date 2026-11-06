@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import re
 import xml.etree.ElementTree as ET
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 
 from .store import ValidationError, catalog_name_key, display_version, text_field
 from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
@@ -32,10 +32,18 @@ def _input_quantity(value, sheet, number, column, label, month):
         from openpyxl.utils import get_column_letter
         kind = ("公式" if isinstance(value, str) and value.lstrip().startswith("=")
                 else "文本" if isinstance(value, str)
-                else "日期或时间" if isinstance(value, (date, datetime))
-                else "非整数或超出范围的值")
+                else "日期或时间" if isinstance(value, (date, datetime, time))
+                else "时长" if isinstance(value, timedelta)
+                else "布尔值" if isinstance(value, bool)
+                else "非有限数值" if isinstance(value, (int, float)) and not math.isfinite(value)
+                else "负数" if isinstance(value, (int, float)) and value < 0
+                else "超出范围的数值" if isinstance(value, (int, float)) and value > 10**12
+                else "小数（非整数）" if isinstance(value, float)
+                else f"无法识别的值（{type(value).__name__}）")
+        actual = "公式" if kind == "公式" else repr(value)[:96]
+        format_code = str(sheet.cell(number, column).number_format)[:96]
         address = f"{sheet.title}!{get_column_letter(column)}{number}"
-        raise ValidationError(f"{address}（{label}，{month}）：{error} 检测到{kind}。") from error
+        raise ValidationError(f"{address}（{label}，{month}）：{error} 检测到{kind}；实际读取值：{actual}；单元格格式：{format_code}。") from error
 
 
 def _blank(value):

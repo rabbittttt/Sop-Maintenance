@@ -886,6 +886,10 @@ function importPlans() {
       try{await load();toast(result.warning?`${message}；${result.warning}`:message,!!result.warning);}catch{toast(`${message}；页面刷新失败，请点击刷新查看${result.warning?`。${result.warning}`:''}`,true);}
     }catch(err){
       if($('#import-plan-form')!==form){toast(err.message,true);return;}
+      if(err.status===400){
+        prepared=null;input.value='';valid=false;hasConflicts=false;maintenanceBlocked=false;conflicts.innerHTML='';
+        showError(`${err.message}\n请保存Excel后重新选择文件导入。`);return;
+      }
       if(err.status===409&&err.data?.source==='maintenance'){
         showMaintenance(err.data);
       }else if(err.status===409&&Array.isArray(err.data?.conflicts)&&err.data.conflicts.length){

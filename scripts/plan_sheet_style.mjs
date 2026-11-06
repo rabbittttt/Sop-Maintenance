@@ -80,7 +80,7 @@ export function stylePlanRow(sheet, {
   const numericRange = `${column(identityColumns + 1)}${row}:${visibleLast}${row}`;
   sheet.getRange(`A${row}:${visibleLast}${row}`).format.borders = borders;
   if (visibleLastColumn > identityColumns) {
-    sheet.getRange(numericRange).format = {numberFormat:'#,##0',horizontalAlignment:'right'};
+    sheet.getRange(numericRange).format = {numberFormat:'0',horizontalAlignment:'right'};
   }
   if (kind === 'product' || kind === 'manual_entry') {
     sheet.getRange(`A${row}:${identityLast}${row}`).format = {

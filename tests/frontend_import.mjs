@@ -77,6 +77,7 @@ function setupDialog(){
   const ids=['import-plan-form','import-plan-file','import-save','import-error','import-progress','import-conflicts','edit-dialog'];
   const map=new Map(ids.map(id=>['#'+id,new Element()]));
   const form=map.get('#import-plan-form'),input=map.get('#import-plan-file'),save=map.get('#import-save'),conflicts=map.get('#import-conflicts'),dialog=map.get('#edit-dialog');
+  Object.defineProperty(input,'value',{get(){return this.fileValue||'';},set(value){this.fileValue=value;if(value==='')this.files=[];}});
   const close=new Element(),cancel=new Element();save.disabled=true;conflicts.conflictContainer=true;conflicts.choices=[];conflicts.maintenanceChoices=[];
   form.querySelectorAll=selector=>{assert.equal(selector,'input,button');return[input,save,cancel,...conflicts.choices,...conflicts.maintenanceChoices];};
   conflicts.querySelectorAll=selector=>{assert.ok(['[data-import-choice]','[data-maintenance-choice]'].includes(selector));return selector==='[data-import-choice]'?conflicts.choices:conflicts.maintenanceChoices;};
@@ -90,7 +91,7 @@ function setupDialog(){
   return {form,input,save,conflicts,dialog,close,error:map.get('#import-error'),progress:map.get('#import-progress')};
 }
 const submitEvent={preventDefault(){}};
-const chooseFile=ui=>{ui.input.files=[context.validFile];ui.input.onchange();};
+const chooseFile=(ui,file=context.validFile)=>{ui.input.files=[file];ui.input.onchange();};
 const conflict={product_id:'p1',month:'2026-10',baseline:100,workbook:120,database:110};
 let ui=setupDialog();
 assert.equal(ui.save.disabled,true);
@@ -161,7 +162,12 @@ assert.equal(readCount,maintenanceReads,'Handling maintenance conflicts must pre
 assert.deepEqual(requests.at(-1).body,prepared,'After maintenance is resolved, upload starts with no carried-over resolution choice.');
 assert.equal(ui.dialog.open,true);
 assert.match(ui.error.textContent,/重新导出/);
-assert.equal(ui.save.disabled,false);
+assert.match(ui.error.textContent,/请保存Excel后重新选择文件导入。$/);
+assert.equal(ui.input.value,'');
+assert.equal(ui.input.files.length,0,'A definite validation failure clears the rejected file selection.');
+assert.equal(ui.save.disabled,true);
+assert.equal(ui.save.hidden,false);
+assert.equal(ui.conflicts.innerHTML,'');
 ui.input.files=[{name:'wrong.csv',size:123}];ui.input.onchange();
 assert.equal(ui.save.disabled,true);
 assert.equal(ui.conflicts.innerHTML,'');
@@ -172,6 +178,61 @@ responseHandler=()=>({ok:true,json:async()=>({ok:true,imported:0,created:0})});
 await ui.form.onsubmit(submitEvent);
 assert.match(messages.at(-1).text,/没有需要导入的新修改/);
 
+// A 400 after conflict resolution requires selecting the saved file again.
+// The same filename can now carry corrected bytes rather than a cached upload.
+ui=setupDialog();
+const invalidWorkbook={name:'SOP计划.xlsx',size:100,encoded:'cGxhbiAzMDAwLjU='};
+const correctedWorkbook={name:'SOP计划.xlsx',size:100,encoded:'cGxhbiAzMDAw'};
+chooseFile(ui,invalidWorkbook);
+const validationReads=readCount;
+responseHandler=()=>({ok:false,status:409,json:async()=>({conflicts:[conflict]})});
+await ui.form.onsubmit(submitEvent);
+assert.equal(readCount,validationReads+1);
+assert.equal(ui.conflicts.choices.length,2);
+responseHandler=()=>({ok:false,status:400,json:async()=>({error:'L10 SOP计划量必须为非负整数'})});
+await ui.conflicts.choices.find(el=>el.dataset.importChoice==='workbook').onclick();
+assert.equal(readCount,validationReads+1,'The conflict choice still uses the original bytes until explicitly rejected.');
+assert.equal(requests.at(-1).body.content_base64,invalidWorkbook.encoded);
+assert.equal(ui.dialog.open,true);
+assert.match(ui.error.textContent,/L10.*非负整数/);
+assert.match(ui.error.textContent,/请保存Excel后重新选择文件导入。$/);
+assert.equal(ui.input.value,'');
+assert.equal(ui.input.files.length,0);
+assert.equal(ui.save.disabled,true);
+assert.equal(ui.save.hidden,false);
+assert.equal(ui.conflicts.innerHTML,'');
+chooseFile(ui,correctedWorkbook);
+assert.equal(ui.save.disabled,false);
+assert.equal(ui.error.textContent,'');
+responseHandler=()=>({ok:true,json:async()=>({ok:true,imported:1,created:0})});
+await ui.form.onsubmit(submitEvent);
+assert.equal(readCount,validationReads+2,'The corrected workbook is read after selecting the same filename again.');
+assert.deepEqual(requests.at(-1).body,{filename:correctedWorkbook.name,content_base64:correctedWorkbook.encoded});
+assert.equal(ui.dialog.open,false);
+
+// Network uncertainty and server failures preserve the confirmed upload for retry.
+ui=setupDialog();chooseFile(ui);
+const uncertainReads=readCount;
+for(const fail of [
+  ()=>{throw new TypeError('Failed to fetch');},
+  ()=>({ok:false,status:502,json:async()=>({error:'导入服务暂不可用'})}),
+  ()=>({ok:false,status:503,json:async()=>{throw new Error('not JSON');}}),
+]){
+  responseHandler=fail;
+  await ui.form.onsubmit(submitEvent);
+  assert.equal(ui.dialog.open,true);
+  assert.equal(ui.save.disabled,false);
+  assert.equal(ui.input.files[0],context.validFile);
+  assert.equal(readCount,uncertainReads+1,'Uncertain retries keep the exact upload bytes.');
+  assert.deepEqual(requests.at(-1).body,prepared);
+  assert.doesNotMatch(ui.error.textContent,/重新选择文件/);
+}
+responseHandler=()=>({ok:true,json:async()=>({ok:true,imported:0,created:0})});
+await ui.form.onsubmit(submitEvent);
+assert.equal(readCount,uncertainReads+1);
+assert.deepEqual(requests.at(-1).body,prepared);
+assert.equal(ui.dialog.open,false);
+
 ui=setupDialog();chooseFile(ui);
 run("load=async()=>{throw new Error('refresh unavailable')}");
 responseHandler=()=>({ok:true,json:async()=>({ok:true,imported:1,created:0,warning:'Excel待回写'})});
@@ -180,4 +241,4 @@ assert.equal(ui.dialog.open,false);
 assert.match(messages.at(-1).text,/已导入 1 项计划.*页面刷新失败.*Excel待回写/);
 assert.doesNotMatch(messages.at(-1).text,/导入失败/);
 
-console.log('PASS: import validation, upload, loading, duplicate prevention, accessible errors, conflict choices, maintenance conflict separation, writeback warning, and safe retry.');
+console.log('PASS: import validation, upload, loading, duplicate prevention, accessible errors, conflict choices, maintenance conflict separation, validation re-selection with corrected bytes, writeback warning, and safe retry.');
