@@ -464,8 +464,8 @@ function annualQuantity(ps,visibleMonths,field,allowModelTotals=ps.length>1) {
 }
 function annualCell(ps,visibleMonths,field,planYear='',allowModelTotals=ps.length>1) {
   const q=annualQuantity(ps,visibleMonths,field,allowModelTotals);
-  const note=q.complete?'数据齐全':q.value==null?'暂无数据':`已知 ${q.knownMonths}/${q.totalMonths} 月${q.partial?' · 缺项':''}`;
-  return `<td class="annual-total number${planYear?' calendar-plan':''}${q.complete?'':' annual-partial'}"${planYear?` data-plan-year="${planYear}"`:''} title="${planYear?`${planYear}年1—12月SOP计划，含视图外月份；`:''}${q.complete?`全部${q.totalMonths}个月数据齐全`:'仅汇总已知值，不代表所选期间完整数量'}${q.model_reference?'；含车型汇总锁单':''}"><strong>${fmt(q.value)}</strong><small>${note}</small></td>`;
+  const title=[planYear?`${planYear}年1—12月SOP计划，含视图外月份`:'',q.model_reference?'含车型汇总锁单':''].filter(Boolean).join('；');
+  return `<td class="annual-total number${planYear?' calendar-plan':''}"${planYear?` data-plan-year="${planYear}"`:''}${title?` title="${title}"`:''}>${q.value==null?'':`<strong>${fmt(q.value)}</strong>`}</td>`;
 }
 function calendarPlanCell(ps,year,field) {
   if(field==='locks')return `<td class="annual-total number calendar-plan" data-plan-year="${year}" title="此列仅统计${year}年度SOP计划量"><span class="missing">—</span></td>`;

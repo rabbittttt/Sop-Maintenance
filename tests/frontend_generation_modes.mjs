@@ -65,7 +65,8 @@ run("yearMonths('2026').forEach(month=>planIndex.set(key('group',month),{sop:0,p
 assert.equal(run("sumPlan([state.products[0]],'2026-10','sop').value"),0);
 assert.match(run("quantity(sumPlan([state.products[0]],'2026-10','sop'))"),/仅已知项合计，仍有缺项/);
 assert.equal(run("annualQuantity([state.products[0]],yearMonths('2026'),'sop').complete"),false);
-assert.match(run("annualCell([state.products[0]],yearMonths('2026'),'sop')"),/12\/12 月 · 缺项/);
+assert.match(run("annualCell([state.products[0]],yearMonths('2026'),'sop')"),/<strong>0<\/strong><\/td>/);
+assert.doesNotMatch(run("annualCell([state.products[0]],yearMonths('2026'),'sop')"),/缺项|暂无数据|annual-partial|<small\b/);
 assert.doesNotMatch(run("annualCell([state.products[0]],yearMonths('2026'),'sop')"),/数据齐全/);
 run('indexData()');
 const calls=requests.length;

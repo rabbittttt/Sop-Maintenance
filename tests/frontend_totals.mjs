@@ -66,13 +66,14 @@ assert.deepEqual(frozenRows.find(r=>r.product_id==='old-version'&&r.month==='202
   {product_id:'old-version',month:'2026-09',sop:0,forecast:8});
 assert.equal(frozenRows.find(r=>r.product_id==='a'&&r.month==='2026-10').sop,null);
 
-// Annual totals never turn absent data into zero or label a partial year as complete.
+// Annual totals retain known values and explicit zeros without completeness labels.
 let annual=get("annualQuantity(state.products,yearMonths('2026'),'sop')");
 assert.equal(annual.value,50);
 assert.equal(annual.knownMonths,1);
 assert.equal(annual.partial,true);
 assert.equal(annual.complete,false);
-assert.match(get("annualCell(state.products,yearMonths('2026'),'sop')"),/已知 1\/12 月 · 缺项/);
+assert.match(get("annualCell(state.products,yearMonths('2026'),'sop')"),/<strong>50<\/strong><\/td>/);
+assert.doesNotMatch(get("annualCell(state.products,yearMonths('2026'),'sop')"),/缺项|暂无数据|数据齐全|已知|annual-partial|<small\b/);
 annual=get("annualQuantity(state.products,yearMonths('2027'),'sop')");
 assert.equal(annual.value,null);
 assert.equal(annual.knownMonths,0);
@@ -81,7 +82,7 @@ vm.runInContext("yearMonths('2027').forEach(m=>state.products.forEach(p=>planInd
 annual=get("annualQuantity(state.products,yearMonths('2027'),'sop')");
 assert.equal(annual.value,0);
 assert.equal(annual.complete,true);
-assert.match(get("annualCell(state.products,yearMonths('2027'),'sop')"),/数据齐全/);
+assert.match(get("annualCell(state.products,yearMonths('2027'),'sop')"),/<strong>0<\/strong><\/td>/);
 vm.runInContext("salesIndex=new Map()",context);
 annual=get("annualQuantity(state.products,yearMonths('2026'),'locks')");
 assert.equal(annual.value,200);
@@ -98,7 +99,7 @@ assert.deepEqual(get('months()'),['2026-07','2026-08','2026-09','2026-10','2026-
 assert.equal(get("annualQuantity(state.products,months(),'sop').complete"),false);
 vm.runInContext("state.current_month='2027-06'",context);
 assert.equal(get("annualQuantity(state.products,months(),'sop').complete"),true);
-assert.match(get("annualCell(state.products,months(),'sop')"),/数据齐全/);
+assert.match(get("annualCell(state.products,months(),'sop')"),/<strong>0<\/strong><\/td>/);
 assert.doesNotMatch(get("annualCell(state.products,months(),'sop')"),/全年完整/);
 vm.runInContext("state.current_month='2027-01'",context);
 assert.equal(get('months()[0]'),'2026-08');
@@ -214,7 +215,7 @@ const cellList=html=>[...html.matchAll(/<(?:td|th)\b[^]*?<\/(?:td|th)>/g)].map(m
 const calendarSOPCells=cellList(get("planMetricRow(state.products,'M5','model','g',months(),'sop')"));
 assert.equal(calendarSOPCells.length,15);
 assert.match(calendarSOPCells[10],/data-plan-year="2026"[^]*?<strong>260<\/strong>/);
-assert.match(calendarSOPCells[10],/数据齐全/);
+assert.doesNotMatch(calendarSOPCells[10],/数据齐全|<small\b/);
 assert.doesNotMatch(calendarSOPCells[10],/data-edit=|data-month=/);
 assert.equal(get("annualQuantity([state.products[0]],yearMonths('2026'),'sop').value"),200);
 assert.match(get("calendarPlanCell([state.products[0]],'2026','sop')"),/<strong>200<\/strong>/);
@@ -232,11 +233,12 @@ assert.doesNotMatch(app.innerHTML,/12个月合计/);
 // Missing one version/month remains partial; a complete explicit-zero year remains zero.
 vm.runInContext("planIndex.delete('a|2026-01')",context);
 assert.match(get("calendarPlanCell(state.products,'2026','sop')"),/<strong>250<\/strong>/);
-assert.match(get("calendarPlanCell(state.products,'2026','sop')"),/已知 12\/12 月 · 缺项/);
+assert.doesNotMatch(get("calendarPlanCell(state.products,'2026','sop')"),/缺项|已知|annual-partial|<small\b/);
 assert.doesNotMatch(get("calendarPlanCell(state.products,'2026','sop')"),/数据齐全/);
 vm.runInContext("yearMonths('2027').forEach(m=>state.products.forEach(p=>planIndex.set(key(p.id,m),{sop:0})))",context);
-assert.match(get("calendarPlanCell(state.products,'2027','sop')"),/<strong>0<\/strong><small>数据齐全/);
-assert.match(get("calendarPlanCell(state.products,'2025','sop')"),/<strong>—<\/strong><small>暂无数据/);
+assert.match(get("calendarPlanCell(state.products,'2027','sop')"),/<strong>0<\/strong><\/td>/);
+assert.match(get("calendarPlanCell(state.products,'2025','sop')"),/data-plan-year="2025"[^>]*><\/td>/);
+assert.doesNotMatch(get("calendarPlanCell(state.products,'2025','sop')"),/暂无数据|缺项|数据齐全|<strong\b/);
 // December controls the year and insertion position, including the window's two edges.
 for(const [current,year,index] of [['2027-01','2026',7],['2027-05','2026',3],['2027-06','2027',14]]) {
   vm.runInContext(`state.current_month='${current}';planning()`,context);
