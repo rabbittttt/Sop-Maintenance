@@ -259,7 +259,14 @@ function committeeFields(){
   const draft=gridDraft.committee;
   if(!draft)return '';
   const disabled=gridLocked()?' disabled':'';
-  return `<label class="field inline-field">决策标签<select id="grid-committee-level"${disabled}>${committeeLevels.map((label,i)=>opt(String(i),label,String(draft.level))).join('')}</select></label>${draft.level?`<label class="field inline-field">决策期次<input type="month" id="grid-committee-period" value="${esc(draft.period)}" max="${esc(state.committee.current_period)}"${disabled}></label><label class="field inline-field">决策范围<select id="grid-committee-scope"${disabled}>${[['','选择范围'],['all','全部'],['brands','按品牌'],['models','按车型']].map(([value,label])=>opt(value,label,draft.scope)).join('')}</select></label>`:''}`;
+  const levelField=`<label class="field inline-field">决策标签<select id="grid-committee-level"${disabled}>${committeeLevels.map((label,i)=>opt(String(i),label,String(draft.level))).join('')}</select></label>`;
+  if(!draft.level)return levelField;
+  const availableMonths=state.committee.plan_months;
+  const startOptions=availableMonths.map(month=>opt(month,shortMonth(month),draft.start_month)).join('');
+  const endOptions=availableMonths.filter(month=>month>=draft.start_month).map(month=>opt(month,shortMonth(month),draft.end_month)).join('');
+  return `${levelField}<label class="field inline-field">决策期次<input type="month" id="grid-committee-period" value="${esc(draft.period)}" max="${esc(state.committee.current_period)}"${disabled}></label><label class="field inline-field">决策范围<select id="grid-committee-scope"${disabled}>${[['','选择范围'],['all','全部'],['brands','按品牌'],['models','按车型']].map(([value,label])=>opt(value,label,draft.scope)).join('')}</select></label>
+    <div class="toolbar" role="group" aria-label="计划月份范围"><label class="field inline-field">计划起月<select id="grid-committee-start" required${disabled}><option value="">选择月份</option>${startOptions}</select></label>
+    <label class="field inline-field">计划止月<select id="grid-committee-end" required${gridLocked()||!draft.start_month?' disabled':''}><option value="">选择月份</option>${endOptions}</select></label></div>`;
 }
 function committeePayload(){
   const draft=gridDraft.committee;
@@ -268,12 +275,22 @@ function committeePayload(){
     $('#grid-committee-period')?.focus();
     throw new Error('请选择有效的决策期次');
   }
-  const {level,period,scope,base_revision}=draft;
-  if(scope==='all')return {level,period,scope,base_revision};
-  if(!['brands','models'].includes(scope)){
+  const {level,period,scope,start_month,end_month,base_revision}=draft;
+  if(!['all','brands','models'].includes(scope)){
     $('#grid-committee-scope')?.focus();
     throw new Error('请选择决策范围');
   }
+  const availableMonths=state.committee.plan_months;
+  if(!availableMonths.includes(start_month)){
+    $('#grid-committee-start')?.focus();
+    throw new Error('请选择计委决策的计划起月');
+  }
+  if(!availableMonths.includes(end_month)||end_month<start_month){
+    $('#grid-committee-end')?.focus();
+    throw new Error('请选择有效的计划止月，止月不能早于起月');
+  }
+  const request={level,period,scope,start_month,end_month,base_revision};
+  if(scope==='all')return request;
   const field=scope==='brands'?'brands':'model_keys';
   const choices=new Map(scope==='brands'
     ? committeeScopeOptions(scope).map(({value})=>[value,value])
@@ -282,7 +299,7 @@ function committeePayload(){
     $('[data-committee-selection]')?.focus();
     throw new Error(scope==='brands'?'请选择本次确认的品牌':'请选择本次确认的车型及年款');
   }
-  return {level,period,scope,base_revision,[field]:[...new Set(draft[field].map(value=>choices.get(value)))]};
+  return {...request,[field]:[...new Set(draft[field].map(value=>choices.get(value)))]};
 }
 function gridToolbar(){if(!gridDraft)return '';return `<section class="grid-toolbar" aria-label="网页维护"><div class="toolbar"><label class="field inline-field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''} ${access.gateway?'readonly aria-readonly="true"':''}></label><label class="field inline-field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label>${committeeFields()}</div><div id="grid-committee-options">${committeeSelectionControls()}</div><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;}
 function gridNewRows(anchor,visible){if(!gridDraft)return '';return [...gridDraft.rows.values()].filter(row=>row.isNew&&!row.virtual&&row.anchor===anchor).map(row=>`<tr class="version-row metric-plan-row grid-new-row" data-new-row="${esc(row.id)}"><th class="sticky-name" scope="row">${gridLabel(row)}</th><td class="sticky-metric">SOP计划量</td>${visible.map(m=>`<td class="sop-cell number${m<state.current_month?' past-month':''}">${isPlanMonthOpen(m)?gridCell(row,m):'未开放'}</td>${range==='rolling'&&m.endsWith('-12')?'<td class="annual-total">保存后计算</td>':''}`).join('')}${range==='rolling'?'':'<td class="annual-total">保存后计算</td>'}</tr>`).join('');}
@@ -736,8 +753,9 @@ function bulkPlan() {
   for(const p of ps){const id=modelGroupKey(p);if(!groups.has(id))groups.set(id,{id,brand:p.brand,model:p.model,originalModel:p.model,parent_generation:p.parent_generation,summary_generation:p.summary_generation,deleted:false});}
   for(const p of ps){const group=modelGroupKey(p),baselines=Object.fromEntries(allPlans().filter(r=>r.product_id===p.id).map(r=>[r.month,{...r}]));rows.set(p.id,{id:p.id,group,original:{...p},isModel:isModelPlan(p),brand:p.brand,model:catalogModel(p),version:p.version,parent_generation:p.parent_generation,baselines,values:{},deleted:false,isNew:false});if(isModelPlan(p))modelRows.set(group,p.id);}
   for(const p of ps){const group=modelGroupKey(p);if(modelRows.has(group))continue;const id='model_'+gridUUID();modelRows.set(group,id);rows.set(id,{id,group,isNew:true,isModel:true,virtual:true,brand:p.brand,model:p.model,parent_generation:p.parent_generation,version:modelPlanLabel,baselines:{},values:{},deleted:false});}
-  const committee=state.committee?{
-    level:0,period:state.committee.current_period,scope:'',brands:[],model_keys:[],base_revision:state.committee.base_revision,
+  const committee=Array.isArray(state.committee?.plan_months)?{
+    level:0,period:state.committee.current_period,scope:'',start_month:'',end_month:'',
+    brands:[],model_keys:[],base_revision:state.committee.base_revision,
   }:null;
   gridDraft={rows,modelRows,groups,owner,reason:'网页维护',mode:generationMode(),signature:state.generation_view?.rule_signature||'',saving:false,uncertain:false,request:null,error:'',committee};
   gridRender();$('#grid-owner')?.focus();
@@ -1019,9 +1037,13 @@ function committeeScopeName(decision){
   if(decision.scope==='brands')return (decision.brands||[]).join('、');
   return (decision.model_keys||[]).map(committeeModelName).join('、');
 }
+function committeeHistoryMonths({start_month,end_month}){
+  if(!start_month||!end_month)return '';
+  return ` · 计划月份 ${start_month===end_month?start_month:`${start_month}—${end_month}`}`;
+}
 function committeeHistory(items){
   if(!state.committee)return '';
-  const records=items.map(item=>`<button class="snapshot-item${item.id===currentCommitteeDecision?.decision.id?' active':''}" type="button" data-committee-decision="${esc(item.id)}"><div><strong>${esc(item.period)} · ${committeeLevels[item.level]}</strong><span class="badge neutral">${item.model_count} 个车型</span></div><p>${esc(committeeScopeName(item))}</p><small>${esc(dateText(item.recorded_at))} · ${esc(item.owner)}</small></button>`).join('');
+  const records=items.map(item=>`<button class="snapshot-item${item.id===currentCommitteeDecision?.decision.id?' active':''}" type="button" data-committee-decision="${esc(item.id)}"><div><strong>${esc(item.period)} · ${committeeLevels[item.level]}</strong><span class="badge neutral">${item.model_count} 个车型</span></div><p>${esc(committeeScopeName(item)+committeeHistoryMonths(item))}</p><small>${esc(dateText(item.recorded_at))} · ${esc(item.owner)}</small></button>`).join('');
   return `<section class="card page-section"><div class="panel-head"><h2>计委记录</h2></div>${records?`<div class="snapshot-list">${records}</div>`:'<div class="empty-state">暂无计委记录</div>'}</section>`;
 }
 function renderCommitteeDecision(detail){
@@ -1035,7 +1057,7 @@ function renderCommitteeDecision(detail){
     const product=byId.get(row.product_id);
     return `<tr><td>${esc(committeeModelName(modelGroupKey(product)))}</td><td>${esc(product.version)}</td><td>${esc(row.month)}</td><td>${quantity(row.sop)}</td></tr>`;
   }).join('')}</tbody></table></div></details>`:'';
-  $('#snapshot-detail').innerHTML=`<section class="card page-section committee-decision-detail"><div class="panel-head"><div><h2>${esc(decision.period)} · ${committeeLevels[decision.level]}</h2><p>${esc(committeeScopeName(decision))} · ${esc(dateText(decision.recorded_at))} · ${esc(decision.owner)}</p></div></div>${table}${details}</section>`;
+  $('#snapshot-detail').innerHTML=`<section class="card page-section committee-decision-detail"><div class="panel-head"><div><h2>${esc(decision.period)} · ${committeeLevels[decision.level]}</h2><p>${esc(committeeScopeName(decision)+committeeHistoryMonths(decision))} · ${esc(dateText(decision.recorded_at))} · ${esc(decision.owner)}</p></div></div>${table}${details}</section>`;
 }
 async function historyPage() {
   const [archive,backups,committees]=await Promise.all([
@@ -1256,12 +1278,21 @@ document.addEventListener('click',async e=>{
 document.addEventListener('change',async e=>{
   try {
     const control=e.target,decision=gridDraft?.committee;
-    if(decision&&!gridLocked()&&['grid-committee-level','grid-committee-period','grid-committee-scope'].includes(control.id)){
-      if(control.id==='grid-committee-level')decision.level=Number(control.value);
+    if(decision&&!gridLocked()&&['grid-committee-level','grid-committee-period','grid-committee-scope','grid-committee-start','grid-committee-end'].includes(control.id)){
+      if(control.id==='grid-committee-level'){
+        decision.level=Number(control.value);
+        decision.start_month='';
+        decision.end_month='';
+      }
       if(control.id==='grid-committee-period')decision.period=control.value;
       if(control.id==='grid-committee-scope')decision.scope=control.value;
+      if(control.id==='grid-committee-start'){
+        decision.start_month=control.value;
+        if(!decision.start_month||decision.end_month<decision.start_month)decision.end_month='';
+      }
+      if(control.id==='grid-committee-end')decision.end_month=control.value;
       gridDraft.request=null;
-      if(control.id!=='grid-committee-period'){
+      if(!['grid-committee-period','grid-committee-end'].includes(control.id)){
         gridRender();
         $(`#${control.id}`)?.focus({preventScroll:true});
       }

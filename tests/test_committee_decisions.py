@@ -70,8 +70,10 @@ class CommitteeDecisionsTest(unittest.TestCase):
                 "generation_rule_signature": view["rule_signature"], "changes": [], "catalog_changes": [],
                 "entries": [], **fields}
 
-    def confirm(self, level=1, period=None, scope="all", *, brands=None, models=None, **fields):
+    def confirm(self, level=1, period=None, scope="all", *, brands=None, models=None,
+                start_month=None, end_month=None, **fields):
         committee = {"level": level, "period": period or self.previous, "scope": scope,
+                     "start_month": start_month or self.target, "end_month": end_month or self.next_target,
                      "base_revision": self.store.state()["committee"]["base_revision"]}
         if brands is not None:
             committee["brands"] = brands
@@ -200,6 +202,68 @@ class CommitteeDecisionsTest(unittest.TestCase):
         for request in (stale, cell_stale, invalid):
             self.assertIsNone(self.store.db.execute("SELECT 1 FROM grid_batch_requests WHERE request_id=?",
                                                    (request["request_id"],)).fetchone())
+
+    def test_partial_month_scope_replaces_only_covered_amounts_and_freezes_only_its_plans(self):
+        broad = self.store.save_grid_batch(self.confirm(scope="brands", brands=["智界"]))
+        revised = self.store.save_grid_batch(self.confirm(
+            scope="models", models=[self.older_r7, self.s7], end_month=self.target,
+            changes=[self.edit("r7-pro", 90), self.edit("r7-pro", 120, self.next_target), self.edit("s7", None)],
+        ))
+        amounts = self.amounts()
+        self.assertEqual(amounts[(1, self.older_r7, self.target)], 110)
+        self.assertEqual(amounts[(1, self.older_r7, self.next_target)], 110)
+        self.assertEqual(amounts[(1, self.newer_r7, self.target)], 40)
+        self.assertIsNone(amounts[(1, self.s7, self.target)])
+        self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id=? AND month=?",
+                                              ("r7-pro", self.next_target)).fetchone()["sop"], 120)
+        first, second = broad["committee"], revised["committee"]
+        self.assertEqual((first["start_month"], first["end_month"]), (self.target, self.next_target))
+        self.assertEqual((second["start_month"], second["end_month"]), (self.target, self.target))
+        self.assertEqual(self.history(), [second, first])
+        detail = self.store.get_committee_decision(second["id"])
+        self.assertEqual(detail["decision"], second)
+        self.assertEqual({row["month"] for row in detail["plans"]}, {self.target})
+        self.assertEqual({row["month"] for row in detail["amounts"]}, {self.target})
+
+    def test_open_calendar_is_independent_of_the_rolling_view_and_validated_atomically(self):
+        months = self.store.state()["committee"]["plan_months"]
+        self.assertEqual((months[0], months[-1]), ("2026-01", "2027-12"))
+        for bounds in (
+            {"start_month": None}, {"end_month": ""}, {"start_month": "2026-1"},
+            {"start_month": "2027-02"}, {"start_month": "2025-12"}, {"end_month": "2028-01"},
+        ):
+            with self.subTest(bounds=bounds):
+                request = self.confirm(changes=[self.edit("r7-pro", 90)])
+                request["committee"].update(bounds)
+                with self.assertRaises(ValidationError):
+                    self.store.save_grid_batch(request)
+        self.assertEqual(self.saved_plan("r7-pro"), 80)
+        self.assertEqual(self.history(), [])
+        result = self.store.save_grid_batch(self.confirm(
+            level=2, scope="models", models=[self.older_r7], start_month="2027-12", end_month="2027-12",
+            changes=[self.edit("r7-pro", 321, "2027-12")],
+        ))
+        self.assertEqual(result["committee"]["end_month"], "2027-12")
+        self.assertEqual(self.amounts(), {(2, self.older_r7, "2027-12"): 321})
+
+    def test_history_preserves_the_months_of_existing_decisions_without_bounds_metadata(self):
+        cursor = self.store.db.execute("""INSERT INTO committee_decisions
+            (period, level, scope, brands, model_keys, model_count, owner, recorded_at, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", (
+            self.previous, 1, "models", "[]", json.dumps([self.older_r7]), 1, "旧记录", self.now.isoformat(),
+            json.dumps({"products": [], "plans": []})))
+        decision_id = cursor.lastrowid
+        self.store.db.executemany("""INSERT INTO committee_amounts
+            (decision_id, model_key, brand, model, month, sop) VALUES (?, ?, ?, ?, ?, ?)""", [
+            (decision_id, self.older_r7, "智界", "R7 2026款", self.target, 95),
+            (decision_id, self.older_r7, "智界", "R7 2026款", self.next_target, 105),
+        ])
+        decision = self.history()[0]
+        self.assertEqual((decision["start_month"], decision["end_month"]), (self.target, self.next_target))
+        self.assertEqual(self.store.get_committee_decision(decision_id)["decision"], decision)
+        self.store.save_grid_batch(self.confirm(scope="models", models=[self.older_r7], end_month=self.target))
+        self.assertEqual(self.amounts()[(1, self.older_r7, self.target)], 100)
+        self.assertEqual(self.amounts()[(1, self.older_r7, self.next_target)], 105)
 
     def test_receipt_failure_rolls_back_confirmation_and_plan_in_the_same_transaction(self):
         request = self.confirm(changes=[self.edit("r7-pro", 90)])

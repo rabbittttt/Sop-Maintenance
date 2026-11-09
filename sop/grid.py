@@ -60,7 +60,6 @@ def save_grid_batch(store, body):
             raise ValidationError("共享规则正在变化，请重新加载表格后重试。")
         current = store.clock().astimezone(TZ)
         current_month, recorded_at = current.strftime("%Y-%m"), stamp(current)
-        plan_end = horizon(current_month, store.settings()["bridge_m6"])
 
         def editable(pid):
             if not isinstance(pid, str) or pid not in visible:
@@ -84,7 +83,9 @@ def save_grid_batch(store, body):
             latest_view = store.generation_view()
             if latest_view["signature"] != view["signature"]:
                 raise ValidationError("代际范围或共享规则已变化，请重新加载表格后核对修改。")
-            decision = committee.validate_request(body["committee"], store) if "committee" in body else None
+            plan_end = horizon(current_month, store.settings()["bridge_m6"])
+            decision = (committee.validate_request(body["committee"], store, sales, current_month, plan_end)
+                        if "committee" in body else None)
             # Recheck catalog revisions under the database write lock too.
             raw = {p["id"]: p for p in store._catalog_items()}
             conflicts, trusted_edits, touched, deleted = [], [], set(), set()
@@ -225,8 +226,7 @@ def save_grid_batch(store, body):
                 frozen_sales = store._catalog_sales(store._read_source_sales())
                 if frozen_sales["generation_view"]["signature"] != view["signature"]:
                     raise ValidationError("共享规则正在变化，请重新加载表格后重试。")
-                result["committee"] = committee.capture(store, decision, sales, frozen_sales,
-                                                        owner, recorded_at, current_month, plan_end)
+                result["committee"] = committee.capture(store, decision, sales, frozen_sales, owner, recorded_at)
             store.db.execute("INSERT INTO grid_batch_requests(request_id,digest,result,created_at) VALUES (?,?,?,?)",
                              (request_id, digest, json.dumps(result, ensure_ascii=False), recorded_at))
             store.db.execute("COMMIT")

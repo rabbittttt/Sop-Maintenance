@@ -844,14 +844,15 @@ class SOPStore:
             month = current.strftime("%Y-%m")
             end = horizon(month, settings["bridge_m6"])
             visible_ids = {p["id"] for p in data["products"]}
+            plans = self.view_plans(data)
             data.update({
-                "plans": self.view_plans(data),
+                "plans": plans,
                 "shipments": [dict(row) for row in self.db.execute("SELECT * FROM shipments ORDER BY product_id,month,source,batch") if row["product_id"] in visible_ids],
                 "settings": settings, "now": stamp(current), "current_month": month, "plan_end": end,
                 "months": month_range(month, end),
                 "history_months": [month_add(month, offset) for offset in (-3, -2, -1)],
                 "snapshot_summary": self.snapshot_summary(),
-                "committee": committee.state(self, month, committee_base),
+                "committee": committee.state(self, month, committee_base, committee.plan_months(month, end, data, plans)),
             })
             return data
 

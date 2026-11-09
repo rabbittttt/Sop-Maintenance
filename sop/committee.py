@@ -39,15 +39,31 @@ def revision(store):
     return ":".join([store.clock().astimezone(TZ).strftime("%Y-%m"), *map(str, values)])
 
 
-def validate_request(value, store):
-    if not isinstance(value, dict) or set(value) - {"level", "period", "scope", "brands", "model_keys", "base_revision"}:
+def plan_months(current_month, plan_end, sales, plans):
+    """Use the editable planning calendar, independent of the displayed period."""
+    members = sales.get("generation_members", {})
+    recorded = (row["month"] for rows in (plans, members.get("plans", []), sales.get("sales", []),
+               sales.get("model_sales", []), members.get("sales", []), members.get("model_sales", [])) for row in rows)
+    first_month = min(month_add(current_month, -3), min(recorded, default=current_month))
+    return month_range(first_month[:4] + "-01", plan_end)
+
+
+def validate_request(value, store, sales, current_month, plan_end):
+    fields = {"level", "period", "scope", "brands", "model_keys", "base_revision", "start_month", "end_month"}
+    if not isinstance(value, dict) or set(value) - fields:
         raise ValidationError("计委决策格式无效。")
     level = value.get("level")
     if type(level) is not int or level not in (1, 2, 3):
         raise ValidationError("请选择一级、二级或三级计委。")
     period = validate_month(value.get("period"))
-    if period > store.clock().astimezone(TZ).strftime("%Y-%m"):
+    if period > current_month:
         raise ValidationError("计委决策期次不能晚于当前期次。")
+    if not value.get("start_month") or not value.get("end_month"):
+        raise ValidationError("请选择计委决策的计划起止月份。")
+    start_month = validate_month(value["start_month"])
+    end_month = validate_month(value["end_month"])
+    if start_month > end_month:
+        raise ValidationError("计委决策的计划开始月不能晚于结束月。")
     scope = value.get("scope")
     if scope not in ("all", "brands", "models"):
         raise ValidationError("请选择计委决策范围。")
@@ -70,7 +86,11 @@ def validate_request(value, store):
     if base != revision(store):
         raise ConflictError([{"kind": "committee", "reason": "plans_changed",
                               "message": "计委决策的计划或车型目录已更新，请刷新后核对决策范围和数量。"}])
-    return {"level": level, "period": period, "scope": scope, "brands": brands, "model_keys": model_keys}
+    months = plan_months(current_month, plan_end, sales, store.view_plans(sales))
+    if start_month not in months or end_month not in months:
+        raise ValidationError(f"计委决策月份须在开放计划范围 {months[0]} 至 {months[-1]} 内。")
+    return {"level": level, "period": period, "scope": scope, "brands": brands, "model_keys": model_keys,
+            "start_month": start_month, "end_month": end_month}
 
 
 def _model_groups(sales):
@@ -114,7 +134,7 @@ def _selected_groups(request, before, after):
     return {key: products for key, products in after.items() if key in selected}
 
 
-def capture(store, request, before, sales, owner, recorded_at, current_month, plan_end):
+def capture(store, request, before, sales, owner, recorded_at):
     """Freeze effective monthly totals and the raw model/version inputs used by them."""
     groups = _model_groups(sales)
     selected = _selected_groups(request, _model_groups(before), groups)
@@ -126,19 +146,11 @@ def capture(store, request, before, sales, owner, recorded_at, current_month, pl
         contributing[key] = [*products, *(all_products[pid] for pid in sorted(linked_ids - own_ids) if pid in all_products)]
     frozen_products = {p["id"]: p for products in contributing.values() for p in products}
 
-    visible_months = [current_month, month_add(current_month, -5)]
-    for data in (sales, sales.get("generation_members", {})):
-        for name in ("sales", "model_sales"):
-            visible_months.extend(row["month"] for row in data.get(name, []))
-    raw_plans = store.db.execute("SELECT * FROM plans WHERE month<=? ORDER BY product_id, month", (plan_end,))
-    plans = []
-    for row in raw_plans:
-        if row["product_id"] in all_products:
-            visible_months.append(row["month"])
-        if row["product_id"] in frozen_products:
-            plans.append(dict(row))
-    first_month = min(visible_months)[:4] + "-01"
-    months = month_range(first_month, plan_end)
+    start_month, end_month = request["start_month"], request["end_month"]
+    raw_plans = store.db.execute("SELECT * FROM plans WHERE month BETWEEN ? AND ? ORDER BY product_id, month",
+                                 (start_month, end_month))
+    plans = [dict(row) for row in raw_plans if row["product_id"] in frozen_products]
+    months = month_range(start_month, end_month)
     plan_index = {(row["product_id"], row["month"]): row for row in plans}
     model_keys = list(selected)
     metadata = {**request, "model_keys": model_keys, "model_count": len(model_keys),
@@ -159,7 +171,7 @@ def capture(store, request, before, sales, owner, recorded_at, current_month, pl
     return {"id": decision_id, **metadata}
 
 
-def state(store, current_period, base_revision):
+def state(store, current_period, base_revision, months):
     previous_period = month_add(current_period, -1)
     # A scoped blank is an explicit replacement. Resolve latest before returning the amount.
     rows = store.db.execute("""
@@ -171,7 +183,7 @@ def state(store, current_period, base_revision):
         ) WHERE rn=1 ORDER BY level, model_key, month
         """, (previous_period,))
     return {"current_period": current_period, "previous_period": previous_period,
-            "base_revision": base_revision, "amounts": [dict(row) for row in rows]}
+            "base_revision": base_revision, "plan_months": months, "amounts": [dict(row) for row in rows]}
 
 
 def _metadata(row):
@@ -182,8 +194,11 @@ def _metadata(row):
 
 
 def list_decisions(store):
-    rows = store.db.execute("""SELECT id, period, level, scope, brands, model_keys, model_count, owner, recorded_at
-        FROM committee_decisions ORDER BY id DESC""")
+    # Stored amount rows describe the exact coverage of old and new decisions.
+    rows = store.db.execute("""SELECT d.id, d.period, d.level, d.scope, d.brands, d.model_keys, d.model_count,
+        d.owner, d.recorded_at, MIN(a.month) AS start_month, MAX(a.month) AS end_month
+        FROM committee_decisions AS d LEFT JOIN committee_amounts AS a ON a.decision_id=d.id
+        GROUP BY d.id ORDER BY d.id DESC""")
     return {"items": [_metadata(row) for row in rows]}
 
 
@@ -199,6 +214,8 @@ def get_decision(store, decision_id):
         raise ValidationError("计委决策不存在。")
     metadata = _metadata(row)
     payload = json.loads(metadata.pop("payload"))
-    amounts = store.db.execute("""SELECT model_key, brand, model, month, sop FROM committee_amounts
-        WHERE decision_id=? ORDER BY model_key, month""", (decision_id,))
-    return {"decision": metadata, "amounts": [dict(item) for item in amounts], **payload}
+    amounts = [dict(item) for item in store.db.execute("""SELECT model_key, brand, model, month, sop FROM committee_amounts
+        WHERE decision_id=? ORDER BY model_key, month""", (decision_id,))]
+    months = {item["month"] for item in amounts}
+    metadata.update(start_month=min(months, default=None), end_month=max(months, default=None))
+    return {"decision": metadata, "amounts": amounts, **payload}
