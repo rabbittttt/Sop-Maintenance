@@ -24,14 +24,13 @@ class OptionMixTest(unittest.TestCase):
         self.path = self.root / SOURCE_NAME
 
     @staticmethod
-    def add_sheet(book, generation, share, total_share=None):
-        total_share = share if total_share is None else total_share
+    def add_sheet(book, generation, share):
         sheet = book.create_sheet(generation + "by天")
         sheet.append(["指标", "统计类型", "分类", datetime(2026, 8, 17),
                       datetime(2026, 8, 18), "近28天", "总计"])
         sheet.append(["交车锁单", "数量", "数量", 5, 5, 10, 10])
-        sheet.append(["动力", "占比", "增程", .2, .3, share, total_share])
-        sheet.append([None, None, "纯电", .8, .7, 1 - share, 1 - total_share])
+        sheet.append(["动力", "占比", "增程", .2, .3, share, 1 - share])
+        sheet.append([None, None, "纯电", .8, .7, 1 - share, share])
         sheet.append([None, "数量", "增程", 2, 2, 2, 2])
         sheet.append([None, None, "纯电", 8, 8, 8, 8])
         sheet.append(["版本", "占比", "Max", 0, 0, 0, 0])
@@ -39,7 +38,6 @@ class OptionMixTest(unittest.TestCase):
         sheet.append(["新维度", "占比", "新品", .2, .2, .2, .2])
         for row in (3, 4, 7, 8, 9):
             sheet.cell(row, 6).number_format = "0.00%"
-            sheet.cell(row, 7).number_format = "0.00%"
 
     def save(self, *generations):
         book = openpyxl.Workbook()
@@ -49,7 +47,7 @@ class OptionMixTest(unittest.TestCase):
         book.save(self.path)
 
     def test_source_display_value_summary_alias_and_dimension_types(self):
-        self.save(("享界 X4 2026款", .7, .25), ("享界 S9 2026款", .2))
+        self.save(("享界 X4 2026款", .7), ("享界 S9 2026款", .2))
         result = read_option_mix(self.root)
         self.assertEqual(result["status"], "ready")
         self.assertEqual((result["latest_date"], result["covered_days"], result["window_days"]),
@@ -60,9 +58,8 @@ class OptionMixTest(unittest.TestCase):
                    and row["dimension"] == "动力" and row["option"] == "增程")
         self.assertEqual(row["source_generation"], "享界 X4 2026款")
         self.assertEqual((row["share"], row["share_display"], row["source_cell"]), (.7, "70.00%", "F3"))
-        self.assertEqual((row["total_share"], row["total_share_display"], row["total_source_cell"]),
-                         (.25, "25.00%", "G3"))
-        self.assertEqual([choice["id"] for choice in result["source_choices"]], ["near28", "total"])
+        self.assertNotIn("total_share", row)
+        self.assertNotIn("source_choices", result)
         self.assertEqual((row["count"], row["sample_count"]), (2, 10))
         self.assertTrue(row["is_vehicle_option"])
         self.assertFalse(next(row for row in result["rows"] if row["dimension"] == "地理区域")["is_vehicle_option"])
@@ -106,7 +103,6 @@ class OptionMixTest(unittest.TestCase):
         book = openpyxl.load_workbook(self.path)
         book.worksheets[0]["F3"] = 1.2
         book.worksheets[0]["F7"] = None
-        book.worksheets[0]["G3"] = -0.2
         book.save(self.path)
         result = read_option_mix(self.root)
         power = next(row for row in result["rows"] if row["dimension"] == "动力" and row["option"] == "增程")
@@ -115,21 +111,7 @@ class OptionMixTest(unittest.TestCase):
         self.assertIsNone(version["share"])
         self.assertTrue(power["source_error"])
         self.assertTrue(version["source_error"])
-        self.assertIsNone(power["total_share"])
-        self.assertTrue(power["total_source_error"])
-        self.assertEqual({issue["source_cell"] for issue in result["issues"]}, {"F3", "F7", "G3"})
-
-    def test_missing_total_column_is_not_filled_from_daily_values(self):
-        self.save(("享界 X4 2026款", .7))
-        book = openpyxl.load_workbook(self.path)
-        book.worksheets[0]["G1"] = None
-        book.save(self.path)
-        result = read_option_mix(self.root)
-        row = next(row for row in result["rows"] if row["dimension"] == "动力" and row["option"] == "增程")
-        self.assertEqual(row["share"], .7)
-        self.assertIsNone(row["total_share"])
-        self.assertIsNone(row["total_source_cell"])
-        self.assertIn("缺少唯一", row["total_source_error"])
+        self.assertEqual({issue["source_cell"] for issue in result["issues"]}, {"F3", "F7"})
 
 
 if __name__ == "__main__":

@@ -82,8 +82,6 @@ def _source_sheet(sheet):
     if len(near_columns) != 1:
         return {"error": "缺少唯一的“近28天”列。", "rows": [], "observed_dates": []}
     near = near_columns[0]
-    total_columns = [i for i, cell in enumerate(header) if _text(cell.value) == "总计"]
-    total = total_columns[0] if len(total_columns) == 1 else None
     day_columns = [(i, day) for i, cell in enumerate(header) if (day := _date(cell.value)) is not None]
     observed_dates = set()
     entries = {}
@@ -101,9 +99,7 @@ def _source_sheet(sheet):
         slot = entries.setdefault((dimension, option), {"dimension": dimension, "option": option,
                                                          "share": None, "share_display": None,
                                                          "count": None, "source_cell": None,
-                                                         "source_error": None,
-                                                         "total_share": None, "total_share_display": None,
-                                                         "total_source_cell": None, "total_source_error": None})
+                                                         "source_error": None})
         source_cell = cells[near] if near < len(cells) else None
         value = source_cell.value if source_cell is not None else None
         if statistic == "占比":
@@ -113,18 +109,6 @@ def _source_sheet(sheet):
             if slot["share"] is None:
                 slot["source_error"] = ("近28天占比为空或公式结果未保存。" if value is None else
                                         "近28天占比必须是 0%—100% 的有限数值。")
-            total_cell = cells[total] if total is not None and total < len(cells) else None
-            total_value = total_cell.value if total_cell is not None else None
-            slot["total_share"] = _share(total_value)
-            slot["total_share_display"] = _share_display(
-                slot["total_share"], total_cell.number_format if total_cell is not None else "")
-            if total is not None:
-                slot["total_source_cell"] = f"{openpyxl.utils.get_column_letter(total + 1)}{row_number}"
-            if slot["total_share"] is None:
-                slot["total_source_error"] = (
-                    "原表缺少唯一的“总计”列。" if total is None else
-                    "总计占比为空或公式结果未保存。" if total_value is None else
-                    "总计占比必须是 0%—100% 的有限数值。")
         else:
             count = _number(value)
             slot["count"] = count if count is not None and count >= 0 else None
@@ -208,7 +192,6 @@ def read_option_mix(source_dir=None):
         if generation not in sources or priority > sources[generation][0]:
             sources[generation] = (priority, raw_generation, sheet)
     rows, missing_summaries, issues, unclassified_dimensions = [], [], [], set()
-    missing_total_columns = set()
     source_coverage = []
     for summary in groups:
         chosen = sources.get(summary)
@@ -234,13 +217,6 @@ def read_option_mix(source_dir=None):
                 issues.append({"generation": generation, "source_sheet": sheet["source_sheet"],
                                "source_cell": row["source_cell"], "dimension": dimension,
                                "option": row["option"], "error": row["source_error"]})
-            if row["total_source_error"]:
-                if row["total_source_cell"] is not None or generation not in missing_total_columns:
-                    issues.append({"generation": generation, "source_sheet": sheet["source_sheet"],
-                                   "source_cell": row["total_source_cell"], "dimension": dimension,
-                                   "option": row["option"], "error": row["total_source_error"]})
-                if row["total_source_cell"] is None:
-                    missing_total_columns.add(generation)
             rows.append({"generation": generation, "normalized_generation": normalize_generation(generation),
                          "source_generation": raw_generation,
                          "brand": brand, "model": model,
@@ -252,7 +228,6 @@ def read_option_mix(source_dir=None):
     covered_days = min((days for day, days in source_coverage if day == latest), default=0)
     return {"source_file": SOURCE_NAME, "status": status, "error": error,
             "latest_date": latest, "covered_days": covered_days, "window_days": WINDOW_DAYS,
-            "source_choices": [{"id": "near28", "label": "近28天"}, {"id": "total", "label": "总计"}],
             "merge_groups": groups, "missing_summaries": missing_summaries,
             "unclassified_dimensions": sorted(unclassified_dimensions),
             "issues": issues, "rows": rows}
