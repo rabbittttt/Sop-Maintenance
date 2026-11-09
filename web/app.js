@@ -96,11 +96,12 @@ const conflictValue = c => v => c.kind==='catalog' ? esc(typeof v==='boolean'?(v
 const conflictField = c => c.kind==='catalog' ? ({brand:'品牌',model:'车型',version:'版本名称',active:'启用状态'})[c.field]||'目录' : c.month||'';
 const pct = v => v == null ? '—' : `${Number(v).toFixed(1)}%`;
 const brands = ['智界','享界','尊界','尚界','问界'];
-const titles = {planning:'SOP计划表', history:'历史快照', matching:'计划匹配率', data:'数据与规则'};
+const titles = {planning:'SOP计划表', 'option-split':'选配拆分', history:'历史快照', matching:'计划匹配率', data:'数据与规则'};
 const statusText = v => ({official:'正式成绩',incomplete:'数据未齐全',missing:'实绩待维护',pending:'待结算',in_progress:'考核月未结束',settled:'已结算',corrected:'已更正',future:'未到取数日',missing_snapshot:'历史快照缺失',missing_plan:'计划待维护',undefined_zero:'双零口径待确认',complete:'可计分'})[v] || v;
 let state, page = 'planning', brand = '', model = '', query = '', target = '', metric = '', range = 'rolling';
 let historyRange = 'recent';
 let planYear = '';
+let optionMix=null, optionMixError='', optionBrand='', optionModel='', optionDimension='', optionRange='rolling', optionYear='', optionBasis='near28', optionRequestId=0, optionExpanded=new Set();
 // The old toggle text was ambiguous. Reset that saved choice once so the
 // corrected model and version lock rows are visible; future choices persist.
 const lockPreferenceKey = 'sop-show-locks-v2';
@@ -418,7 +419,7 @@ function indexData() {
 }
 async function load(render = true) {
   if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');
-  const freshState=await api('/api/state');if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');state=freshState;generationViewError=state.generation_view?.error||'';generationErrorKind='rules';indexData();restoreInitialView();
+  const freshState=await api('/api/state');if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');state=freshState;optionRequestId++;optionMix=null;optionMixError='';generationViewError=state.generation_view?.error||'';generationErrorKind='rules';indexData();restoreInitialView();
   target ||= state.current_month; matchMonth ||= shift(state.current_month,-1); metric = 'locked_orders';
   const ob = $('#owner-btn'); if (ob) ob.textContent = owner || '设置维护人';
   if(render) await renderPage();
@@ -1193,11 +1194,183 @@ function dataPage() {
     `<div class="two-col"><section class="card"><div class="panel-head"><h2>销量数据接入</h2><div class="toolbar"><span class="badge good">已接入</span>${button('来源与停用管理','manage-products','small')}${button('刷新销量文件','refresh-sales','primary small')}</div></div><div class="card-body"><dl class="info-list"><dt>业务数据截至</dt><dd>${esc(meta.data_through||'待确认')}</dd>${state.source_refresh?.status==='error'?`<dt>读取异常</dt><dd>${esc(state.source_refresh.message)}</dd>`:''}<dt>最近读取</dt><dd>${dateText(meta.generated_at)}</dd><dt>版本数量</dt><dd>${state.products.length} 个</dd><dt>参考口径</dt><dd>${meta.metrics.map(m=>esc(m.label)).join('、')}</dd></dl><h3>来源文件</h3><ul class="source-list">${sources.map(s=>`<li>${esc(typeof s==='string'?s:s.file||s.name||s.path||JSON.stringify(s))}${s.sheet?`<small>${esc(s.sheet)}</small>`:''}</li>`).join('')}</ul></div></section><section class="card"><div class="panel-head"><h2>计划与快照规则</h2><div class="toolbar">${workbookActions}</div></div><div class="card-body"><dl class="info-list"><dt>维护颗粒度</dt><dd>品牌 → 车型＋年款 × 月份；版本可选</dd><dt>本月计划口径</dt><dd>全月总量（含已发生部分）</dd><dt>年度扩展</dt><dd>每年9月开放到次年12月</dd><dt>当前计划截止</dt><dd>${shortMonth(state.plan_end)}</dd><dt>每日快照截点</dt><dd>24:00（北京时间）</dd><dt>提前0周</dt><dd>月初周内属于当月的天数超过4天，取上周日24:00。其余取当周日24:00。</dd></dl><label class="checkbox-field"><input id="bridge-toggle" type="checkbox" ${state.settings.bridge_m6!==false?'checked':''}>7、8月补足M+6（7月到次年1月，8月到次年2月）</label>${button('保存规则','save-settings')}</div></section></div>`+
     (q.length?`<section class="card page-section"><div class="panel-head"><h2>数据检查</h2></div><div class="card-body">${q.map(item=>`<div class="quality-row"><span class="badge warn">${item.level==='error'?'异常':'待核对'}</span><span>${esc(item.message||item.name||'')}</span></div>`).join('')}</div></section>`:'');
 }
+function optionMonths() {
+  return optionRange==='rolling'
+    ? Array.from({length:12},(_,i)=>shift(state.current_month,i-5))
+    : yearMonths(optionYear);
+}
+function optionProductGroups() {
+  const groups=new Map();
+  for(const product of state.products||[]) {
+    const id=modelGroupKey(product);
+    if(!groups.has(id))groups.set(id,{id,brand:product.brand,model:product.model,products:[]});
+    groups.get(id).products.push(product);
+  }
+  return [...groups.values()].sort((a,b)=>compareBrands(a.brand,b.brand)||a.model.localeCompare(b.model,'zh-CN'));
+}
+function optionMemberGroups(parent) {
+  const generation=optionGeneration(parent),groups=new Map();
+  for(const product of memberData().products||[]) {
+    if(product.parent_generation!==generation)continue;
+    const id=modelGroupKey(product);
+    if(!groups.has(id))groups.set(id,{id,brand:product.brand,model:product.model,products:[],parent});
+    groups.get(id).products.push(product);
+  }
+  return [...groups.values()].sort((a,b)=>a.model.localeCompare(b.model,'zh-CN'));
+}
+function optionPlanQuantity(group,month) {
+  if(group.parent&&group.parent.products.some(p=>isModelPlan(p)&&planIndex.get(key(p.id,month))?.sop!=null))return null;
+  return sumPlan(group.products,month,'sop').value;
+}
+function optionGeneration(group) {
+  const summaries=[...new Set(group.products.map(p=>p.summary_generation).filter(Boolean))];
+  if(summaries.length)return summaries.length===1?summaries[0]:'';
+  const generations=[...new Set(group.products.flatMap(productGenerations).filter(Boolean))];
+  if(generations.length===1)return generations[0];
+  const inferred=`${group.brand} ${group.model}`;
+  return generations.length?'' : (optionMix?.rows||[]).some(row=>row.generation===inferred)?inferred:'';
+}
+function optionSourceGroups(generation) {
+  const groups=new Map();
+  for(const row of optionMix?.rows||[]) {
+    if(row.generation!==generation||row.is_vehicle_option!==true)continue;
+    if(!groups.has(row.dimension))groups.set(row.dimension,[]);
+    groups.get(row.dimension).push(row);
+  }
+  return groups;
+}
+function optionNameKey(value) { return String(value||'').replace(/^\s*\d{4}款\s*/i,'').replace(/[\s·・]/g,'').toLowerCase(); }
+function optionShare(item) { return optionBasis==='total'?item.total_share:item.share; }
+function optionShareDisplay(item) { const value=optionShare(item),display=optionBasis==='total'?item.total_share_display:item.share_display;return display??(value==null?'':`${(value*100).toFixed(2)}%`); }
+function optionSourceCell(item) { return optionBasis==='total'?item.total_source_cell:item.source_cell; }
+function optionAllocation(group,dimension,items,month) {
+  const plan=optionPlanQuantity(group,month);
+  if(plan==null)return {values:items.map(()=>null)};
+  if(!Number.isSafeInteger(plan)||plan<0)return {error:'SOP计划量不是非负整数'};
+  const keys=items.map(item=>optionNameKey(item.option));
+  if(new Set(keys).size!==keys.length)return {error:'原表选配项名称重复'};
+  const modelTotal=group.products.some(p=>isModelPlan(p)&&planValue(p,month,'sop')!=null);
+  const versionPlans=dimension==='版本'?group.products.filter(p=>!isModelPlan(p)&&!p.read_only&&planValue(p,month,'sop')!=null):[];
+  if(versionPlans.length&&!modelTotal) {
+    const byName=new Map();
+    for(const p of versionPlans) {
+      const name=optionNameKey(p.configuration||p.version);
+      if(keys.includes(name))byName.set(name,(byName.get(name)||0)+planValue(p,month,'sop'));
+    }
+    return {values:keys.map(name=>byName.has(name)?byName.get(name):null),manual:true};
+  }
+  if(items.some(item=>typeof optionShare(item)!=='number'||!Number.isFinite(optionShare(item))||optionShare(item)<0||optionShare(item)>1))return {error:'原表比例存在空白或无效值'};
+  const shareTotal=items.reduce((sum,item)=>sum+optionShare(item),0);
+  if(Math.abs(shareTotal-1)>0.005)return {error:`原表比例合计 ${Number((shareTotal*100).toFixed(2))}%，未拆分`};
+  // The displayed source shares stay unchanged; only their tiny rounding drift
+  // is reconciled while allocating an integer plan across exclusive options.
+  const exact=items.map(item=>plan*optionShare(item)/shareTotal),values=exact.map(value=>Math.floor(value+1e-9));
+  const remainder=plan-values.reduce((sum,value)=>sum+value,0);
+  if(remainder<0||remainder>items.length)return {error:'原表比例与计划总量无法按整数守恒'};
+  const order=exact.map((value,index)=>({index,fraction:value-values[index]}))
+    .sort((a,b)=>b.fraction-a.fraction||a.index-b.index);
+  for(let i=0;i<remainder;i++)values[order[i].index]++;
+  return {values,modelTotal};
+}
+function optionAnnual(group,dimension,items,year,index) {
+  const results=yearMonths(year).map(month=>optionAllocation(group,dimension,items,month));
+  if(results.some(result=>result.error))return '';
+  const values=results.map(result=>result.values[index]).filter(value=>value!=null);
+  return values.length?fmt(values.reduce((sum,value)=>sum+value,0)):'';
+}
+function optionManualVersionRows(group,generation,items,visible,rolling) {
+  const sourceKeys=new Set(items.map(item=>optionNameKey(item.option))),manual=new Map();
+  for(const p of group.products) {
+    if(isModelPlan(p)||p.read_only)continue;
+    const id=optionNameKey(p.configuration||p.version);
+    if(!manual.has(id))manual.set(id,{name:p.version,products:[]});
+    manual.get(id).products.push(p);
+  }
+  const valueAt=(entry,month,unlisted)=>{
+    const override=group.products.some(p=>isModelPlan(p)&&planValue(p,month,'sop')!=null);
+    if(!unlisted&&!override)return null;
+    const values=entry.products.map(p=>planValue(p,month,'sop')).filter(value=>value!=null);
+    return values.length?values.reduce((sum,value)=>sum+value,0):null;
+  };
+  const annual=(entry,year,unlisted)=>{const values=yearMonths(year).map(month=>valueAt(entry,month,unlisted)).filter(v=>v!=null);return values.length?fmt(values.reduce((sum,v)=>sum+v,0)):'';};
+  let html='';
+  for(const [id,entry] of manual) {
+    const unlisted=!sourceKeys.has(id);
+    if(!visible.some(month=>valueAt(entry,month,unlisted)!=null)&&!(rolling?visible.filter(month=>month.endsWith('-12')).some(month=>annual(entry,month.slice(0,4),unlisted)):annual(entry,optionYear,unlisted)))continue;
+    const cells=visible.map(month=>`<td class="number${month<state.current_month?' past-month':''}" title="人工版本计划${unlisted?'，原表无此选项':'，车型总量优先'}">${valueAt(entry,month,unlisted)==null?'':fmt(valueAt(entry,month,unlisted))}</td>${rolling&&month.endsWith('-12')?`<td class="number annual-total">${annual(entry,month.slice(0,4),unlisted)}</td>`:''}`).join('');
+    html+=`<tr class="option-item-row option-manual-row" data-option-generation="${esc(generation)}" data-option-dimension="版本" data-option-name="${esc(entry.name)}" data-option-manual="true"><th scope="row" class="option-name">${esc(entry.name)}<small>人工计划${unlisted?' · 原表无比例':' · 车型量优先'}</small></th><td class="option-share"></td>${cells}${rolling?'':`<td class="number annual-total">${annual(entry,optionYear,unlisted)}</td>`}</tr>`;
+  }
+  return html;
+}
+function optionPageRender() {
+  if(optionMixError){$('#app').innerHTML=pageHeading('option-split')+`<section class="card empty-state" role="alert"><strong>${esc(optionMixError)}</strong>${button('重新读取','retry-option-mix','small')}</section>`;return;}
+  const all=optionProductGroups();
+  const dimensions=[...new Set((optionMix?.rows||[]).filter(row=>row.is_vehicle_option===true).map(row=>row.dimension))];
+  if(optionDimension&&!dimensions.includes(optionDimension))optionDimension='';
+  const years=planYears();optionYear=years.includes(optionYear)?optionYear:state.current_month.slice(0,4);
+  const visible=optionMonths(),rolling=optionRange==='rolling';
+  const selected=all.filter(group=>(!optionBrand||group.brand===optionBrand)&&(!optionModel||group.id===optionModel)&&(!!optionModel||visible.some(month=>optionPlanQuantity(group,month)!=null)));
+  const yearCell=year=>`<th scope="col" class="annual-total calendar-plan">${year}年年度计划量</th>`;
+  const headers=visible.map(month=>`<th scope="col" class="${month<state.current_month?'past-month':''}">${shortMonth(month)}</th>${rolling&&month.endsWith('-12')?yearCell(month.slice(0,4)):''}`).join('')+(rolling?'':`<th scope="col" class="annual-total">${optionYear}年合计</th>`);
+  const yearPlan=(group,year)=>{const values=yearMonths(year).map(month=>optionPlanQuantity(group,month)).filter(v=>v!=null);return values.length?fmt(values.reduce((sum,v)=>sum+v,0)):'';};
+  const planCells=group=>visible.map(month=>`<td class="number${month<state.current_month?' past-month':''}">${fmt(optionPlanQuantity(group,month))}</td>${rolling&&month.endsWith('-12')?`<td class="number annual-total">${yearPlan(group,month.slice(0,4))}</td>`:''}`).join('')+(rolling?'':`<td class="number annual-total">${yearPlan(group,optionYear)}</td>`);
+  const unavailable=new Map((optionMix?.missing_summaries||[]).map(entry=>[entry.generation,entry.error]));
+  const fullColumns=visible.length+2+(rolling?visible.filter(month=>month.endsWith('-12')).length:1);
+  const renderGroup=(group,member=false)=>{
+    const generation=optionGeneration(group),dimensionGroups=optionSourceGroups(generation),name=member?generation:`${group.brand} · ${group.model}`;
+    const children=member?[]:optionMemberGroups(group);
+    const source=dimensionGroups.values().next().value?.[0];
+    const sourceMeta=source?.latest_date?`<small class="option-sample">${esc(source.latest_date)}${optionBasis==='near28'?` · ${Number(source.covered_days)||0}/28天`:''}</small>`:'';
+    const expand=children.length?`<button type="button" class="option-expand" data-option-expand="${esc(group.id)}" aria-label="${optionExpanded.has(group.id)?'收起':'展开'}${esc(name)}的单代际" aria-expanded="${optionExpanded.has(group.id)}">${optionExpanded.has(group.id)?'−':'+'}</button>`:'';
+    let html=`<tr class="option-model-row${member?' option-member-row':''}" data-option-generation="${esc(generation)}"><th scope="row" class="option-name">${expand}${esc(name)}${sourceMeta}</th><td class="option-share">SOP计划量</td>${planCells(group)}</tr>`;
+    if(!generation||!dimensionGroups.size) {
+      const reason=unavailable.has(generation)?`${generation}：${unavailable.get(generation)}`:`原表缺少“${generation||name}”的直接近28天选配比例`;
+      const manual=(!optionDimension||optionDimension==='版本')?optionManualVersionRows(group,generation,[],visible,rolling):'';
+      return html+`<tr class="option-source-error" data-option-generation="${esc(generation)}"><td colspan="${fullColumns}">${esc(reason)}</td></tr>`+(manual?`<tr class="option-dimension-row" data-option-dimension="版本"><th scope="row" class="option-name">版本</th><td class="option-share"></td><td colspan="${fullColumns-2}"></td></tr>${manual}`:'');
+    }
+    if(optionDimension&&!dimensionGroups.has(optionDimension))html+=`<tr class="option-source-error" data-option-generation="${esc(generation)}"><td colspan="${fullColumns}">${esc(generation)} 原表缺少“${esc(optionDimension)}”比例</td></tr>`;
+    for(const [dimension,items] of dimensionGroups) {
+      if(optionDimension&&optionDimension!==dimension)continue;
+      const monthResults=visible.map(month=>optionAllocation(group,dimension,items,month));
+      const issue=monthResults.find(result=>result.error)?.error;
+      const manual=dimension==='版本'&&monthResults.some(result=>result.manual);
+      const overridden=dimension==='版本'&&visible.some(month=>group.products.some(p=>!isModelPlan(p)&&!p.read_only&&planValue(p,month,'sop')!=null)&&group.products.some(p=>isModelPlan(p)&&planValue(p,month,'sop')!=null));
+      html+=`<tr class="option-dimension-row${member?' option-member-row':''}" data-option-generation="${esc(generation)}" data-option-dimension="${esc(dimension)}"><th scope="row" class="option-name">${esc(dimension)}${manual?'<small>已维护版本计划</small>':overridden?'<small>车型量优先</small>':''}</th><td class="option-share"></td><td colspan="${fullColumns-2}">${issue?`<span class="option-source-error">${esc(issue)}</span>`:''}</td></tr>`;
+      if(!issue)items.forEach((item,index)=>{
+        const itemCells=visible.map((month,mIndex)=>`<td class="number${month<state.current_month?' past-month':''}"${monthResults[mIndex].manual?' title="已维护版本计划"':''}>${monthResults[mIndex].values[index]==null?'':fmt(monthResults[mIndex].values[index])}</td>${rolling&&month.endsWith('-12')?`<td class="number annual-total">${optionAnnual(group,dimension,items,month.slice(0,4),index)}</td>`:''}`).join('');
+        const annual=rolling?'':`<td class="number annual-total">${optionAnnual(group,dimension,items,optionYear,index)}</td>`;
+        const sourceCell=`${item.source_sheet||`${item.source_generation||generation}by天`}!${optionSourceCell(item)||''}`;
+        const share=optionShareDisplay(item);
+        html+=`<tr class="option-item-row${member?' option-member-row':''}" data-option-generation="${esc(generation)}" data-option-dimension="${esc(dimension)}" data-option-name="${esc(item.option)}"><th scope="row" class="option-name">${esc(item.option)}</th><td class="option-share" title="${esc(sourceCell)}">${esc(share)}</td>${itemCells}${annual}</tr>`;
+      });
+      if(dimension==='版本')html+=optionManualVersionRows(group,generation,items,visible,rolling);
+    }
+    if(!dimensionGroups.has('版本')&&(!optionDimension||optionDimension==='版本')) {
+      const manual=optionManualVersionRows(group,generation,[],visible,rolling);
+      if(manual)html+=`<tr class="option-dimension-row" data-option-generation="${esc(generation)}" data-option-dimension="版本"><th scope="row" class="option-name">版本</th><td class="option-share"></td><td colspan="${fullColumns-2}"><span class="option-source-error">原表缺少版本比例</span></td></tr>${manual}`;
+    }
+    return html;
+  };
+  const rows=selected.map(group=>renderGroup(group)+(optionExpanded.has(group.id)?optionMemberGroups(group).map(child=>renderGroup(child,true)).join(''):'')).join('');
+  const status=optionMix?.latest_date?(optionBasis==='near28'?`选配截至 <strong>${esc(optionMix.latest_date)}</strong> · 近28天覆盖 <strong>${Number(optionMix.covered_days)||0}/28天</strong>`:`选配总计截至 <strong>${esc(optionMix.latest_date)}</strong>`):'选配数据待更新';
+  const freshness=optionMix?.status==='stale'||optionMix?.error?`<span class="option-source-error" title="${esc(optionMix.error||'选配来源待刷新')}">选配来源待刷新</span>`:'';
+  const unclassified=optionMix?.unclassified_dimensions?.length??[...new Set((optionMix?.rows||[]).filter(row=>row.is_vehicle_option==null).map(row=>row.dimension))].length;
+  $('#app').innerHTML=pageHeading('option-split')+`<div class="plan-controls option-controls"><div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field">周期<select id="option-range">${opt('rolling','M+6（滚动12个月）',optionRange)}${opt('annual','全年',optionRange)}</select></label>${rolling?'':`<label class="field inline-field">年份<select id="option-year">${years.map(year=>opt(year,`${year}年`,optionYear)).join('')}</select></label>`}<label class="field inline-field">比例口径<select id="option-basis">${opt('near28','近28天',optionBasis)}${opt('total','总计',optionBasis)}</select></label><label class="field inline-field">品牌<select id="option-brand">${opt('','全部品牌',optionBrand)}${[...new Set(all.map(group=>group.brand))].map(name=>opt(name,name,optionBrand)).join('')}</select></label><label class="field inline-field">车型<select id="option-model">${opt('','全部车型',optionModel)}${all.filter(group=>!optionBrand||group.brand===optionBrand).map(group=>opt(group.id,optionBrand?group.model:`${group.brand} · ${group.model}`,optionModel)).join('')}</select></label><label class="field inline-field">维度<select id="option-dimension">${opt('','全部维度',optionDimension)}${dimensions.map(name=>opt(name,name,optionDimension)).join('')}</select></label></div></div><div class="sheet-meta">${status}${freshness}${unclassified?`<span>待分类维度 <strong>${unclassified}</strong></span>`:''}</div></div><section class="card option-sheet" aria-label="选配拆分计划表"><div class="table-scroll" tabindex="0"><table class="option-table"><thead><tr><th scope="col" class="option-name">车型 / 选配项</th><th scope="col" class="option-share">原表${optionBasis==='total'?'总计':'近28天'}占比</th>${headers}</tr></thead><tbody>${rows||`<tr><td class="empty-state" colspan="${fullColumns}">${selected.length?'没有可拆分的选配维度':'当前周期没有计划量'}</td></tr>`}</tbody></table></div></section>`;
+}
+async function optionPage() {
+  if(!optionMix&&!optionMixError) {
+    $('#app').innerHTML=pageHeading('option-split')+'<div class="loading-state" role="status"><span class="loading-spinner" aria-hidden="true"></span><strong>正在读取选配比例</strong></div>';
+    const request=++optionRequestId;
+    try { const fresh=await api('/api/option-mix');if(request!==optionRequestId)return;optionMix=fresh; }
+    catch(error) { if(request!==optionRequestId)return;optionMixError=error.message; }
+  }
+  if(page==='option-split')optionPageRender();
+}
 async function renderPage() {
   $('#page-title').textContent=titles[page];
   $$('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===page);b.setAttribute('aria-current',b.dataset.page===page?'page':'false');});
   if(generationViewError&&page!=='history')return showGenerationError(generationViewError);
-  if(page==='planning')planning();else if(page==='history')await historyPage();else if(page==='matching')await matchingPage();else dataPage();
+  if(page==='planning')planning();else if(page==='option-split')await optionPage();else if(page==='history')await historyPage();else if(page==='matching')await matchingPage();else dataPage();
 }
 async function handleAction(action,el) {
   if(writeActions.has(action))requireWrite();
@@ -1209,6 +1382,7 @@ async function handleAction(action,el) {
   if(action==='view-apply')return applyTableView();
   if(action==='view-delete'){tableViews.views=tableViews.views.filter(v=>v.id!==selectedView);if(tableViews.active===selectedView)tableViews.active='';selectedView='';viewNameDraft=null;persistTableViews();planning();return;}
   if(action==='rows-restore'){hiddenRows={};refreshHiddenRows();return;}
+  if(action==='retry-option-mix'){optionRequestId++;optionMix=null;optionMixError='';return optionPage();}
 
   if(action==='close-dialog')return closeDialog();
   if(action==='manage-products')return productManager();
@@ -1300,6 +1474,7 @@ document.addEventListener('click',async e=>{
     if(el.dataset.gridRemove){gridRemoveRow(el.dataset.gridRemove);return;}
     if(el.dataset.gridRemoveModel){gridRemoveModel(el.dataset.gridRemoveModel);return;}
     if('gridAddBrand' in el.dataset){gridAddRow(el.dataset.gridAddBrand,el.dataset.gridAddModel,el.dataset.gridAnchor);return;}
+    if(el.dataset.optionExpand){const scroll=$('.option-sheet .table-scroll'),left=scroll?.scrollLeft||0,top=scroll?.scrollTop||0,id=el.dataset.optionExpand;if(optionExpanded.has(id))optionExpanded.delete(id);else optionExpanded.add(id);optionPageRender();const next=$('.option-sheet .table-scroll');if(next){next.scrollLeft=left;next.scrollTop=top;}$(`[data-option-expand="${CSS.escape(id)}"]`)?.focus({preventScroll:true});return;}
     if(el.dataset.expand){if(!gridLocked())toggleModel(el.dataset.expand);return;}
     if(gridDraft&&!['grid-save','grid-cancel','grid-add','expand-all','toggle-locks','toggle-committee'].includes(el.dataset.action)){toast('请先保存或取消表内修改，再进行其他操作',true);return;}
     if(gridLocked()&&['expand-all','toggle-locks','toggle-committee'].includes(el.dataset.action))return;
@@ -1307,7 +1482,7 @@ document.addEventListener('click',async e=>{
     if(el.dataset.restoreRow){delete hiddenRows[el.dataset.restoreRow];refreshHiddenRows();return;}
     if(el.dataset.catalogBind){requireWrite();bindProductSource(el.dataset.catalogBind);return;}
     if(el.dataset.catalogEdit){requireWrite();editProduct(el.dataset.catalogEdit);return;}
-    if(el.dataset.page){page=el.dataset.page;if(page==='matching')query='';await renderPage();return;}
+    if(el.dataset.page){page=el.dataset.page;if(page==='matching')query='';if(page==='option-split'){optionRequestId++;optionMix=null;optionMixError='';}await renderPage();return;}
     if('brand' in el.dataset){brand=el.dataset.brand;model='';matchProduct='';query='';selected=null;await renderPage();return;}
     if(el.dataset.range){range=el.dataset.range;planning();return;}
     if(el.dataset.edit){requireWrite();await editInGrid(el.dataset.edit,el.dataset.month);return;}
@@ -1378,6 +1553,12 @@ document.addEventListener('change',async e=>{
     if(e.target.id==='saved-table-view'){const prior=selectedView;try{selectedView=e.target.value;viewNameDraft=null;if(selectedView)applyTableView();else planning();}catch(error){selectedView=prior;e.target.value=prior;throw error;}return;}
     if(e.target.id==='restore-hidden-row'){if(e.target.value){delete hiddenRows[e.target.value];refreshHiddenRows();}return;}
     if(e.target.id==='generation-filter'){await changeGenerationMode(e.target.value,e.target);return;}
+    if(e.target.id==='option-basis'){optionBasis=e.target.value==='total'?'total':'near28';optionPageRender();return;}
+    if(e.target.id==='option-range'){optionRange=e.target.value==='annual'?'annual':'rolling';optionPageRender();return;}
+    if(e.target.id==='option-year'){optionYear=e.target.value;optionPageRender();return;}
+    if(e.target.id==='option-brand'){optionBrand=e.target.value;optionModel='';optionPageRender();return;}
+    if(e.target.id==='option-model'){optionModel=e.target.value;optionPageRender();return;}
+    if(e.target.id==='option-dimension'){optionDimension=e.target.value;optionPageRender();return;}
     if(e.target.id==='range-filter'){range=e.target.value==='annual'?'annual':'rolling';planning();}
     if(e.target.id==='year-filter'){selectPlanYear(e.target.value);planning();}
     if(e.target.id==='brand-filter'){brand=e.target.value;model='';matchProduct='';query='';selected=null;planning();}

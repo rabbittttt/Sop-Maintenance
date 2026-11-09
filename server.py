@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from sop.paths import plan_workbook_path, runtime_data_directory
+from sop.paths import plan_workbook_path, runtime_data_directory, source_directory
 from sop.store import ConflictError, SOPStore, ValidationError
 from sop.workbook import WorkbookSync
 from sop.backup import SnapshotBackup
@@ -27,6 +27,7 @@ from sop.export import ExportError, MAX_REQUEST_BYTES, PlanExport
 from sop.refresh import SalesRefresh
 from sop.source_rules import MergeRuleError
 from sop.gateway import GatewayConfig, GatewayError, attributed_body
+from sop.option_mix import OptionMixError, read_option_mix
 
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("sop")
@@ -214,6 +215,8 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                 self._json({"error": str(error)}, 400)
             elif isinstance(error, ExportError):
                 self._json({"error": str(error)}, error.status)
+            elif isinstance(error, OptionMixError):
+                self._json({"error": str(error)}, 503)
             else:
                 LOGGER.exception("Request failed")
                 self._json({"error": "操作未完成，原有数据已保留。请查看本地服务日志。"}, 500)
@@ -243,6 +246,8 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     if workbook_sync:
                         state["workbook_sync"] = workbook_sync.status()
                     self._json(state)
+                elif path == "/api/option-mix":
+                    self._json(read_option_mix(source_directory(getattr(source_refresh, "root", ROOT))))
                 elif path == "/api/products":
                     self._json(store.list_products())
                 elif path == "/api/plan-workbook/status" and workbook_sync:
