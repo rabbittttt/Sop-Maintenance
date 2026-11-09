@@ -865,6 +865,7 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 .saved-view-strip .text-action:disabled { opacity:.5; }
 .sheet-tools .sheet-meta { margin:0 0 0 auto; font-size:11px; gap:6px 14px; }
 .sheet-meta .sheet-sync { font-size:11px; }
+.sheet-meta .committee-toggle { min-height:24px; padding:2px 6px; font-size:11px; }
 @media(max-width:1250px) {
   .annual-filters { flex:1 1 100%; }
   .plan-toolbar-actions { margin-left:0; justify-content:flex-start; }
@@ -903,3 +904,14 @@ input[aria-readonly="true"]{background:#f1f4f8;color:#4c5e73}
 .generation-member-row .sticky-name{padding-left:30px;background:#f4f7fb}
 .generation-member-row.version-row .sticky-name{padding-left:48px;background:#fafbfd}
 .generation-member-row .row-toggle{font-size:12px;font-weight:600}
+
+.committee-options { min-width:0; margin:8px 0 0; padding:6px 8px 8px; border:1px solid var(--border); border-radius:var(--control-radius); }
+.committee-options legend { padding:0 4px; font-size:12px; font-weight:600; }
+.committee-options-list { display:flex; flex-wrap:wrap; gap:4px 14px; max-height:9rem; overflow:auto; }
+.committee-options-list label { display:inline-flex; align-items:center; gap:5px; min-height:30px; font-size:12px; }
+.committee-options-list input { flex:none; }
+.committee-scope-total { display:inline-block; margin-top:6px; font-size:12px; }
+.grid-toolbar #grid-committee-period { width:145px; }
+.annual-sheet .plan-table .committee-row .sticky-metric { font-size:11px; font-weight:500; color:var(--muted); }
+.annual-sheet .plan-table tbody .committee-row td.number { font-size:13px; font-weight:500; }
+.committee-version-detail > summary { padding:10px 14px; cursor:pointer; }

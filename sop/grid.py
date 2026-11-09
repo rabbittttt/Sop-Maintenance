@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 
+from . import committee
 from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
 
 from .source_rules import generation_display_model, normalize_generation, project_generation_sources, generation_parent
@@ -19,7 +20,7 @@ def _revision(value):
 
 def save_grid_batch(store, body):
     allowed = {"request_id", "owner", "reason", "notes", "generation_mode", "generation_rule_signature",
-               "changes", "catalog_changes", "entries"}
+               "changes", "catalog_changes", "entries", "committee"}
     if not isinstance(body, dict) or set(body) - allowed:
         raise ValidationError("表格批量维护请求格式无效。")
     try:
@@ -83,6 +84,7 @@ def save_grid_batch(store, body):
             latest_view = store.generation_view()
             if latest_view["signature"] != view["signature"]:
                 raise ValidationError("代际范围或共享规则已变化，请重新加载表格后核对修改。")
+            decision = committee.validate_request(body["committee"], store) if "committee" in body else None
             # Recheck catalog revisions under the database write lock too.
             raw = {p["id"]: p for p in store._catalog_items()}
             conflicts, trusted_edits, touched, deleted = [], [], set(), set()
@@ -218,6 +220,13 @@ def save_grid_batch(store, body):
             result = {"ok": True, "items": saved, "entry_ids": entry_ids, "products": created,
                       "saved_count": len(saved), "created_count": len(created),
                       "catalog_updated_count": len(updated), "deactivated_count": len(deactivated)}
+            if decision:
+                # Reproject newly saved catalog rows without starting a nested catalog transaction.
+                frozen_sales = store._catalog_sales(store._read_source_sales())
+                if frozen_sales["generation_view"]["signature"] != view["signature"]:
+                    raise ValidationError("共享规则正在变化，请重新加载表格后重试。")
+                result["committee"] = committee.capture(store, decision, sales, frozen_sales,
+                                                        owner, recorded_at, current_month, plan_end)
             store.db.execute("INSERT INTO grid_batch_requests(request_id,digest,result,created_at) VALUES (?,?,?,?)",
                              (request_id, digest, json.dumps(result, ensure_ascii=False), recorded_at))
             store.db.execute("COMMIT")

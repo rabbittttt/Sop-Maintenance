@@ -107,8 +107,12 @@ const lockPreferenceKey = 'sop-show-locks-v2';
 let showLocks = localStorage.getItem(lockPreferenceKey) !== 'false';
 const wenjiePreferenceKey = 'sop-show-wenjie';
 let showWenjie = localStorage.getItem(wenjiePreferenceKey) !== 'false';
+const committeePreferenceKey = 'sop-show-committee';
+let showCommittee = localStorage.getItem(committeePreferenceKey) !== 'false';
+const committeeLevels = ['普通保存','一级计委','二级计委','三级计委'];
 let expanded = new Set(), allExpanded = false, selected = null, snapshotList = [], currentSnapshot = null;
 let planIndex = new Map(), salesIndex = new Map(), shipmentIndex = new Map();
+let committeeIndex = new Map(), currentCommitteeDecision = null;
 let owner = localStorage.getItem('sop-owner') || '';
 let matchMonth = '', matchProduct = '', comparison = null, activeRequest = 0;
 let generationSwitchPending = false, generationViewError = '', generationErrorKind = 'rules';
@@ -148,7 +152,7 @@ function rowHidden(level,id){return Object.hasOwn(hiddenRows,rowViewKey(level,id
 function productHidden(p){return rowHidden('brand',p.brand)||rowHidden('model',modelGroupKey(p))||rowHidden('version',p.id);}
 function hideRow(level,id,label){hiddenRows[rowViewKey(level,id)]=label;refreshHiddenRows();}
 function hiddenControl(level,id,label){return `<button class="row-visibility" type="button" data-hide-level="${level}" data-hide-id="${esc(id)}" data-hide-label="${esc(label)}" aria-label="隐藏${esc(label)}" title="隐藏此组行，不改变合计">隐藏</button>`;}
-function viewConfig(){return {generation_mode:generationMode(),hidden:{...hiddenRows},range,planYear,brand,model,query,showLocks,showWenjie,allExpanded,expanded:[...expanded]};}
+function viewConfig(){return {generation_mode:generationMode(),hidden:{...hiddenRows},range,planYear,brand,model,query,showLocks,showWenjie,allExpanded,expanded:[...expanded],showCommittee};}
 function compatibleHiddenRows(saved){
   const result={};
   for(const [key,label] of Object.entries(saved||{})){
@@ -162,8 +166,8 @@ function compatibleHiddenRows(saved){
 function restoreViewConfig(config){
   hiddenRows=config.hidden&&typeof config.hidden==='object'&&!Array.isArray(config.hidden)?compatibleHiddenRows(config.hidden):{};
   range=config.range==='annual'?'annual':'rolling';planYear=String(config.planYear||'');brand=String(config.brand||'');model=String(config.model||'');query=String(config.query||'');
-  showLocks=config.showLocks!==false;showWenjie=config.showWenjie!==false;allExpanded=!!config.allExpanded;expanded=new Set(Array.isArray(config.expanded)?config.expanded:[]);
-  localStorage.setItem(lockPreferenceKey,String(showLocks));localStorage.setItem(wenjiePreferenceKey,String(showWenjie));
+  showLocks=config.showLocks!==false;showWenjie=config.showWenjie!==false;showCommittee=config.showCommittee??showCommittee;allExpanded=!!config.allExpanded;expanded=new Set(Array.isArray(config.expanded)?config.expanded:[]);
+  localStorage.setItem(lockPreferenceKey,String(showLocks));localStorage.setItem(wenjiePreferenceKey,String(showWenjie));localStorage.setItem(committeePreferenceKey,String(showCommittee));
 }
 function restoreInitialView(){
   if(viewsRestored)return;viewsRestored=true;
@@ -175,7 +179,7 @@ function restoreInitialView(){
 }
 function viewControls(){
   const entries=Object.entries(hiddenRows).filter(([k])=>{try{return hierarchicalPlanning()||JSON.parse(k)[0]===generationMode();}catch{return false;}});
-  const active=tableViews.views.find(v=>v.id===selectedView),applied=active&&JSON.stringify(active.config)===JSON.stringify(viewConfig());
+  const active=tableViews.views.find(v=>v.id===selectedView),applied=active&&JSON.stringify({...active.config,showCommittee:active.config.showCommittee??showCommittee})===JSON.stringify(viewConfig());
   return `<div class="saved-view-strip" role="group" aria-label="保存视图与恢复隐藏行"><div class="field inline-field view-field"><label for="table-view-name">视图</label><div class="view-combobox"><input id="table-view-name" aria-label="视图名称" maxlength="60" value="${esc(viewNameDraft??active?.name??'')}" placeholder="视图名称"><select id="saved-table-view" aria-label="选择已存视图"><option value="">当前视图</option>${tableViews.views.map(v=>`<option value="${esc(v.id)}" ${v.id===selectedView&&applied?'selected':''} >${esc(v.name)}</option>`).join('')}</select></div></div>${button('保存视图','view-save','small text-action')}${button('删除视图','view-delete','small text-action muted-action',selectedView?'':'disabled')}<span class="tool-divider" aria-hidden="true"></span>${button(`${planToolIcon('restore')}恢复隐藏行${entries.length?`（${entries.length}）`:''}`,'rows-restore','small text-action',`${entries.length?'':'disabled'}`)}${entries.length?`<label class="field inline-field"><span class="visually-hidden">恢复单行</span><select id="restore-hidden-row"><option value="">恢复单行…</option>${entries.map(([k,label])=>opt(k,label,'')).join('')}</select></label>`:''}</div>`;
 }
 function saveTableView(){const name=$('#table-view-name').value.trim();if(!name)throw new Error('请填写视图名称');const existing=tableViews.views.find(v=>v.name===name);const id=existing?.id||gridUUID();const view={id,name,config:viewConfig()};tableViews.views=tableViews.views.filter(v=>v.id!==id);tableViews.views.push(view);tableViews.active=id;selectedView=id;viewNameDraft=null;persistTableViews();const saved=persistHiddenRows();planning();toast(saved?'视图已保存在当前浏览器':'命名视图已保存，但浏览器未能记住当前隐藏状态',!saved);}
@@ -216,7 +220,72 @@ function gridCell(row,month){
   const fallback=row.isModel?(row.original?.summary_generation?row.baselines[month]?.auto_sop:sumPlan(allProducts().filter(p=>!isModelPlan(p)&&modelGroupKey(p)===row.group),month,'sop').value):null;
   return `<input class="grid-quantity${String(value)!==String(old)?' changed':''}" data-grid-id="${esc(row.id)}" data-grid-month="${month}"${row.isModel?` data-grid-model="${esc(row.model)}"`:''} inputmode="numeric" value="${esc(value)}" aria-label="${esc(row.isModel?row.model:row.version||'新增版本')} ${month} SOP计划量" placeholder="${fallback==null?'—':`汇总${fmt(fallback)}`}" ${gridLocked()||row.deleted?'disabled':''}>`;
 }
-function gridToolbar(){if(!gridDraft)return '';return `<section class="grid-toolbar" aria-label="网页维护"><div class="toolbar"><label class="field inline-field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''} ${access.gateway?'readonly aria-readonly="true"':''}></label><label class="field inline-field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label></div><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;}
+function committeeScopeModels(){
+  const options=new Map();
+  for(const product of allProducts()){
+    if(product.read_only||product.active===false||gridRow(product.id)?.deleted)continue;
+    const key=modelGroupKey(product),group=gridDraft?.groups.get(key);
+    if(group?.deleted)continue;
+    options.set(key,{
+      value:key,key,brand:(group?.brand||product.brand).trim(),model:(group?.model||product.model).trim(),
+      parent:product.parent_generation,summary:!!product.summary_generation,
+    });
+  }
+  for(const row of gridDraft?.rows.values()||[]){
+    if(!row.isNew||!row.isModel||row.virtual||row.deleted||!row.brand.trim()||!row.model.trim())continue;
+    const brand=row.brand.trim(),model=row.model.trim(),key=modelGroupKey({brand,model,parent_generation:row.parent_generation});
+    if(![...options.values()].some(item=>item.key===key)){
+      options.set(row.id,{value:row.id,key,brand,model,parent:row.parent_generation,summary:false});
+    }
+  }
+  return [...options.values()].sort((a,b)=>a.brand.localeCompare(b.brand,'zh-CN')||a.model.localeCompare(b.model,'zh-CN'));
+}
+function committeeScopeOptions(scope){
+  const models=committeeScopeModels();
+  if(scope==='brands')return [...new Set(models.map(item=>item.brand))].map(brand=>({value:brand,label:brand}));
+  return models.map(({value,brand,model,parent,summary})=>({
+    value,label:[brand,model,parent?`单代际 · ${parent}`:summary?'汇总代际':''].filter(Boolean).join(' · '),
+  }));
+}
+function committeeSelectionControls(){
+  const draft=gridDraft.committee;
+  if(!draft?.level)return '';
+  if(draft.scope==='all')return `<span class="committee-scope-total">已选 ${committeeScopeModels().length} 个车型</span>`;
+  if(!['brands','models'].includes(draft.scope))return '';
+  const options=committeeScopeOptions(draft.scope),selected=new Set(draft[draft.scope==='brands'?'brands':'model_keys']);
+  const count=options.filter(item=>selected.has(item.value)).length;
+  return `<fieldset class="committee-options"${gridLocked()?' disabled':''}><legend>${draft.scope==='brands'?'品牌':'车型及年款'} · 已选 <span id="grid-committee-count">${count}</span></legend><div class="committee-options-list">${options.length?options.map(item=>`<label><input type="checkbox" data-committee-selection value="${esc(item.value)}"${selected.has(item.value)?' checked':''}>${esc(item.label)}</label>`).join(''):'<span>暂无可选范围</span>'}</div></fieldset>`;
+}
+function committeeFields(){
+  const draft=gridDraft.committee;
+  if(!draft)return '';
+  const disabled=gridLocked()?' disabled':'';
+  return `<label class="field inline-field">决策标签<select id="grid-committee-level"${disabled}>${committeeLevels.map((label,i)=>opt(String(i),label,String(draft.level))).join('')}</select></label>${draft.level?`<label class="field inline-field">决策期次<input type="month" id="grid-committee-period" value="${esc(draft.period)}" max="${esc(state.committee.current_period)}"${disabled}></label><label class="field inline-field">决策范围<select id="grid-committee-scope"${disabled}>${[['','选择范围'],['all','全部'],['brands','按品牌'],['models','按车型']].map(([value,label])=>opt(value,label,draft.scope)).join('')}</select></label>`:''}`;
+}
+function committeePayload(){
+  const draft=gridDraft.committee;
+  if(!draft?.level)return null;
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(draft.period)||draft.period>state.committee.current_period){
+    $('#grid-committee-period')?.focus();
+    throw new Error('请选择有效的决策期次');
+  }
+  const {level,period,scope,base_revision}=draft;
+  if(scope==='all')return {level,period,scope,base_revision};
+  if(!['brands','models'].includes(scope)){
+    $('#grid-committee-scope')?.focus();
+    throw new Error('请选择决策范围');
+  }
+  const field=scope==='brands'?'brands':'model_keys';
+  const choices=new Map(scope==='brands'
+    ? committeeScopeOptions(scope).map(({value})=>[value,value])
+    : committeeScopeModels().map(({value,key})=>[value,key]));
+  if(!draft[field].length||draft[field].some(value=>!choices.has(value))){
+    $('[data-committee-selection]')?.focus();
+    throw new Error(scope==='brands'?'请选择本次确认的品牌':'请选择本次确认的车型及年款');
+  }
+  return {level,period,scope,base_revision,[field]:[...new Set(draft[field].map(value=>choices.get(value)))]};
+}
+function gridToolbar(){if(!gridDraft)return '';return `<section class="grid-toolbar" aria-label="网页维护"><div class="toolbar"><label class="field inline-field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''} ${access.gateway?'readonly aria-readonly="true"':''}></label><label class="field inline-field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label>${committeeFields()}</div><div id="grid-committee-options">${committeeSelectionControls()}</div><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;}
 function gridNewRows(anchor,visible){if(!gridDraft)return '';return [...gridDraft.rows.values()].filter(row=>row.isNew&&!row.virtual&&row.anchor===anchor).map(row=>`<tr class="version-row metric-plan-row grid-new-row" data-new-row="${esc(row.id)}"><th class="sticky-name" scope="row">${gridLabel(row)}</th><td class="sticky-metric">SOP计划量</td>${visible.map(m=>`<td class="sop-cell number${m<state.current_month?' past-month':''}">${isPlanMonthOpen(m)?gridCell(row,m):'未开放'}</td>${range==='rolling'&&m.endsWith('-12')?'<td class="annual-total">保存后计算</td>':''}`).join('')}${range==='rolling'?'':'<td class="annual-total">保存后计算</td>'}</tr>`).join('');}
 function gridAddRow(b=brand,m='',anchor=''){if(!gridDraft||gridLocked()||gridDraft.groups.get(anchor)?.deleted)return;const group=gridDraft.groups.get(anchor);if(group){b=group.brand;m=group.model;}const id='new_'+gridUUID(),isModel=!anchor;gridDraft.rows.set(id,{id,isNew:true,isModel,brand:b||'',model:m||'',version:isModel?modelPlanLabel:'',anchor,parent_generation:group?.parent_generation,values:{},baselines:{},deleted:false});if(anchor)expanded.add(anchor);gridDraft.request=null;gridRender();$(`[data-grid-id="${id}"][data-grid-field="${isModel?'model':'version'}"]`)?.focus();}
 function gridRemoveRow(id){if(!gridDraft||gridLocked())return;const row=gridRow(id);if(!row)return;if(row.isNew)gridDraft.rows.delete(id);else row.deleted=!row.deleted;gridDraft.request=null;gridRender();}
@@ -245,10 +314,11 @@ function gridPayload(){
     if(row.isNew)entries.push({client_id:row.id,brand:row.brand.trim(),model:row.model.trim(),version:row.isModel?modelPlanLabel:row.version.trim(),...(row.isModel?{plan_level:'model'}:{}),...(row.parent_generation?{parent_generation:row.parent_generation}:{}),plans});
     else {const c={id:row.id,revision:row.original.revision||0};for(const field of ['brand','model','version']){const original=field==='model'?catalogModel(row.original):row.original[field];if(row[field].trim()!==original)c[field]=row[field].trim();}if(Object.keys(c).length>2)catalog_changes.push(c);}
   }
-  return {request_id:gridUUID(),owner:gridDraft.owner.trim(),reason:gridDraft.reason.trim(),generation_mode:gridDraft.mode,generation_rule_signature:gridDraft.signature,changes,catalog_changes,entries};
+  const committee=committeePayload();
+  return {request_id:gridUUID(),owner:gridDraft.owner.trim(),reason:gridDraft.reason.trim(),generation_mode:gridDraft.mode,generation_rule_signature:gridDraft.signature,changes,catalog_changes,entries,...(committee?{committee}:{})};
 }
 async function saveGrid(){
-  if(!gridDraft||gridDraft.saving)return;let payload;try{payload=gridDraft.request||gridPayload();if(!payload.changes.length&&!payload.catalog_changes.length&&!payload.entries.length)return toast('没有需要保存的修改');}catch(error){gridDraft.error=error.message;$('#grid-error').textContent=error.message;return;}
+  if(!gridDraft||gridDraft.saving)return;let payload;try{payload=gridDraft.request||gridPayload();if(!payload.changes.length&&!payload.catalog_changes.length&&!payload.entries.length&&!payload.committee)return toast('没有需要保存的修改');}catch(error){gridDraft.error=error.message;$('#grid-error').textContent=error.message;return;}
   gridDraft.request=payload;gridDraft.saving=true;gridDraft.error='';gridRender();
   try{const response=await serviceFetch('/api/plans/batch-edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});let result;try{result=await response.json();}catch{throw new Error('无法确认保存结果，请重试确认；草稿已保留');}
     if(!response.ok){const error=new Error(result.error||'保存失败');error.definite=response.status>=400&&response.status<500&&response.status!==408&&response.status!==429;throw error;}
@@ -260,9 +330,10 @@ async function saveGrid(){
     if(addedModels.length||payload.catalog_changes.some(c=>'brand' in c||'model' in c)){brand='';model='';query='';}
     if(addedModels.some(entry=>entry.brand==='问界')&&!showWenjie){showWenjie=true;try{localStorage.setItem(wenjiePreferenceKey,'true');}catch{/* The saved model remains available even if browser preferences cannot persist. */}}
     try{localStorage.setItem('sop-owner',owner);}catch{/* Business save already succeeded; storage failure must not trigger a retry. */}
-    await load();toast(`已保存计划${result.saved_count||0}项，新增${result.created_count||0}行，停用${result.deactivated_count||0}行${result.workbook_sync&&['error','conflict','pending'].includes(result.workbook_sync.status)?'；Excel等待同步':''}${hiddenSaved?'':'；浏览器未能记住隐藏行设置'}`,!hiddenSaved);
+    await load();toast(`已保存计划${result.saved_count||0}项，新增${result.created_count||0}行，停用${result.deactivated_count||0}行${result.committee?' · '+committeeLevels[result.committee.level]+'已留存':''}${result.workbook_sync&&['error','conflict','pending'].includes(result.workbook_sync.status)?'；Excel等待同步':''}${hiddenSaved?'':'；浏览器未能记住隐藏行设置'}`,!hiddenSaved);
   }catch(error){if(!gridDraft){toast('已保存，页面刷新失败，请点击刷新数据',true);return;}gridDraft.saving=false;gridDraft.uncertain=!error.definite;gridDraft.error=error.message+(error.definite?'；修改仍保留，可取消后刷新核对。':'；保存结果尚未确认，请重试原请求，避免重复新增。');if(error.definite)gridDraft.request=null;gridRender();}
 }
+const committeeKey = (level,modelKey,month) => JSON.stringify([level,modelKey,month]);
 const key = (id, month) => `${id}|${month}`;
 function shift(month, n) { const [y,m] = month.split('-').map(Number); const d = new Date(Date.UTC(y,m-1+n,1)); return d.toISOString().slice(0,7); }
 function shortMonth(m) { return `${m.slice(0,4)}.${m.slice(5)}`; }
@@ -286,6 +357,9 @@ function indexData() {
   planIndex = new Map(allPlans().map(p=>[key(p.product_id,p.month),p]));
   salesIndex = new Map(allSales().map(p=>[`${key(p.product_id,p.month)}|${p.metric}`,p.value]));
   shipmentIndex = new Map((state.shipments || []).map(p=>[key(p.product_id,p.month),p]));
+  committeeIndex = new Map((state.committee?.amounts||[]).map(r=>[
+    committeeKey(r.level,r.model_key||modelGroupKey(r),r.month),r.sop,
+  ]));
 }
 async function load(render = true) {
   if(gridDraft)throw new Error('请先保存或取消表内修改，再刷新数据');
@@ -506,10 +580,26 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
   const nameCell=showName?`<th scope="row" class="sticky-name"${rowSpan>1?` rowspan="${rowSpan}"`:''}>${labelContent}</th>`:'';
   return `<tr class="${cls} ${isLock?'metric-lock-row':'metric-plan-row'}${!one&&showName?' summary-start':''}${blockStart?' metric-block-start':''}" data-plan-metric="${field}"${one?` data-version="${esc(p.id)}"`:''}>${nameCell}<td class="sticky-metric"><span class="metric-label ${isLock?'lock-label':'plan-label'}">${isLock?'锁单数':'SOP计划量'}</span></td>${cells}${range==='rolling'?'':annualCell(ps,visibleMonths,field,'',!one)}</tr>`;
 }
+function committeeRows(modelKey,visibleMonths) {
+  return [1,2,3].map(level=>{
+    const valueAt=month=>committeeIndex.get(committeeKey(level,modelKey,month));
+    const annual=year=>{
+      const values=yearMonths(year).map(valueAt).filter(value=>value!=null);
+      return `<td class="annual-total number${range==='rolling'?' calendar-plan':''}">${values.length?fmt(values.reduce((total,value)=>total+value,0)):''}</td>`;
+    };
+    const cells=visibleMonths.map(month=>{
+      const value=valueAt(month),past=month<state.current_month?' past-month':'';
+      return `<td class="number${past}">${value==null?'':fmt(value)}</td>${range==='rolling'&&month.endsWith('-12')?annual(month.slice(0,4)):''}`;
+    }).join('');
+    return `<tr class="committee-row" data-committee-level="${level}" data-committee-model="${esc(modelKey)}"><th scope="row" class="sticky-metric">上期${committeeLevels[level]}</th>${cells}${range==='rolling'?'':annual(planYear)}</tr>`;
+  }).join('');
+}
 function planRow(ps,label,level,id,visibleMonths,isOpen=false) {
-  if(!showLocks)return planMetricRow(ps,label,level,id,visibleMonths,'sop',{isOpen});
-  return planMetricRow(ps,label,level,id,visibleMonths,'locks',{isOpen,rowSpan:2})+
-    planMetricRow(ps,label,level,id,visibleMonths,'sop',{showName:false});
+  const previous=level==='model'&&ps.length&&showCommittee&&state.committee;
+  const rowSpan=(showLocks?2:1)+(previous?3:0);
+  const locks=showLocks?planMetricRow(ps,label,level,id,visibleMonths,'locks',{isOpen,rowSpan}):'';
+  return locks+planMetricRow(ps,label,level,id,visibleMonths,'sop',{isOpen,showName:!showLocks,rowSpan})+
+    (previous?committeeRows(id,visibleMonths):'');
 }
 function planVersionRows(ps,visibleMonths) {
   return (showLocks?['locks','sop']:['sop']).map(field=>ps.filter(p=>!isModelPlan(p)&&!productHidden(p)).map((p,i)=>
@@ -553,6 +643,11 @@ function planning() {
   if(!editable.includes(target))target=editable.find(m=>m===state.current_month)||editable[0]||'';
   const models=[...new Set(products({applyFilters:false}).filter(p=>!brand||p.brand===brand).map(p=>p.model))];
   const versionLockLatest=showLocks?latestVersionLockMonth():'';
+  const previousPeriod=state.committee?.previous_period;
+  const committeeToggle=state.committee?button(
+    previousPeriod?`上期计委 ${shortMonth(previousPeriod)}`:'上期计委',
+    'toggle-committee','small lock-toggle committee-toggle',`aria-pressed="${showCommittee}"`,
+  ):'';
   let rows='',modelRowsVisible=0;
   for(const b of [...new Set([...brands,...ps.map(p=>p.brand)])]) {
     const bp=ps.filter(p=>p.brand===b);if(!bp.length||rowHidden('brand',b))continue;
@@ -572,7 +667,7 @@ function planning() {
   const actions=`<div class="toolbar plan-actions">${gridDraft?button(gridDraft.saving?'正在保存…':gridDraft.uncertain?'重试确认保存':'保存修改','grid-save','primary small',gridDraft.saving?'disabled':'')+button('取消','grid-cancel','small',gridLocked()?'disabled':''):button(`${planToolIcon('edit')}网页维护`,'bulk-plan','primary small')}<div class="plan-file-actions">${button(`${planToolIcon('import')}导入Excel`,'import-plan','small')}${button(`${planToolIcon('export')}导出`,'export-plan','small')}</div></div>`;
   $('#app').innerHTML=`${pageHeading('planning')}
     <div class="plan-controls"><div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field year-field">周期<select id="range-filter">${opt('rolling','M+6（滚动12个月）',range)}${opt('annual','全年',range)}</select></label>${rolling?'':`<label class="field inline-field year-field">年份<select id="year-filter">${years.map(y=>opt(y,`${y}年`,planYear)).join('')}</select></label>`}<label class="field inline-field">品牌<select id="brand-filter">${opt('','全部品牌',brand)}${visibleBrands().map(b=>opt(b,b,brand)).join('')}</select></label><label class="field inline-field">车型<select id="model-filter">${opt('','全部车型',model)}${models.map(m=>opt(m,m,model)).join('')}</select></label><label class="field inline-field annual-search"><span class="visually-hidden">搜索车型或版本</span>${planToolIcon('search')}<input id="version-search" placeholder="搜索车型 / 版本" value="${esc(query)}"></label></div><div class="plan-toolbar-actions"><div class="toolbar display-toggles">${button(wenjieToggleLabel(),'toggle-wenjie','small lock-toggle',`aria-pressed="${showWenjie}"`)}${button(lockToggleLabel(),'toggle-locks','small lock-toggle',`aria-pressed="${showLocks}"`)}${button(`${planToolIcon('expand')}${allExpanded?'收起明细':'展开明细'}`,'expand-all','small text-action')}</div>${actions}</div></div>
-    <div class="sheet-tools">${viewControls()}<div class="sheet-meta"><span>销量截止 <strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划至 <strong>${shortMonth(state.plan_end)}</strong></span>${versionLockLatest?`<span>版本锁单最新来源月：<strong>${shortMonth(versionLockLatest)}</strong></span>`:''}${workbookStrip()}</div></div></div>
+    <div class="sheet-tools">${viewControls()}<div class="sheet-meta"><span>销量截止 <strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划至 <strong>${shortMonth(state.plan_end)}</strong></span>${versionLockLatest?`<span>版本锁单最新来源月：<strong>${shortMonth(versionLockLatest)}</strong></span>`:''}${committeeToggle}${workbookStrip()}</div></div></div>
     ${gridToolbar()}${generationWarnings()}<section class="card plan-card annual-sheet${gridDraft?' grid-editing':''}${rolling?' rolling-sheet':''}" aria-label="${rolling?'M+6':planYear+'年'}SOP计划表"><div class="table-scroll" tabindex="0" aria-label="${showLocks?'锁单和':''}SOP计划表，可横向滚动"><table class="plan-table" style="--plan-month-count:${visible.length}"><thead><tr><th scope="col" class="sticky-name">品牌 / 车型 / 版本</th><th scope="col" class="sticky-metric">指标</th>${visible.map((m,i)=>`<th scope="col" class="${m===state.current_month?'selected-month':''}${m<state.current_month?' past-month':''}" title="${m}${m<state.current_month?' · 已过去月份':''}${isPlanMonthOpen(m)?'':' · SOP未开放'}">${rolling?shortMonth(m):`${Number(m.slice(5))}月`}${rolling?`<span class="month-tag">${i<5?`M${i-5}`:i===5?'本月':`M+${i-5}`}</span>`:m===state.current_month?'<span class="month-tag">本月</span>':''}</th>${rolling&&m.endsWith('-12')?calendarPlanHeader(m.slice(0,4)):''}`).join('')}${rolling?'':`<th scope="col" class="annual-total">${planYear}年合计</th>`}</tr></thead><tbody>${ps.length||gridDraft?rows:`<tr><td colspan="${visible.length+3}" class="empty-state">没有符合筛选条件的版本</td></tr>`}</tbody></table></div></section>`;  if(gridDraft){$$('.annual-toolbar input,.annual-toolbar select,.saved-view-strip input,.saved-view-strip select,.saved-view-strip button,[data-action=toggle-wenjie],[data-action=import-plan],[data-action=export-plan]').forEach(el=>el.disabled=true);if(gridLocked())$$('[data-expand],[data-action=expand-all],[data-action=toggle-locks]').forEach(el=>el.disabled=true);}
 }
 function openDialog(html) { $('#edit-dialog').classList.toggle('catalog-dialog',html.includes('id="catalog-manager"')); $('#edit-dialog').classList.toggle('export-dialog',html.includes('id="export-plan-form"')||html.includes('id="import-plan-form"')); $('#dialog-content').innerHTML=html; const title=$('h2',$('#dialog-content'));if(title)title.id='dialog-title';applyAccessControls();$('#edit-dialog').showModal(); }
@@ -643,7 +738,10 @@ function bulkPlan() {
   for(const p of ps){const id=modelGroupKey(p);if(!groups.has(id))groups.set(id,{id,brand:p.brand,model:p.model,originalModel:p.model,parent_generation:p.parent_generation,summary_generation:p.summary_generation,deleted:false});}
   for(const p of ps){const group=modelGroupKey(p),baselines=Object.fromEntries(allPlans().filter(r=>r.product_id===p.id).map(r=>[r.month,{...r}]));rows.set(p.id,{id:p.id,group,original:{...p},isModel:isModelPlan(p),brand:p.brand,model:catalogModel(p),version:p.version,parent_generation:p.parent_generation,baselines,values:{},deleted:false,isNew:false});if(isModelPlan(p))modelRows.set(group,p.id);}
   for(const p of ps){const group=modelGroupKey(p);if(modelRows.has(group))continue;const id='model_'+gridUUID();modelRows.set(group,id);rows.set(id,{id,group,isNew:true,isModel:true,virtual:true,brand:p.brand,model:p.model,parent_generation:p.parent_generation,version:modelPlanLabel,baselines:{},values:{},deleted:false});}
-  gridDraft={rows,modelRows,groups,owner,reason:'网页维护',mode:generationMode(),signature:state.generation_view?.rule_signature||'',saving:false,uncertain:false,request:null,error:''};
+  const committee=state.committee?{
+    level:0,period:state.committee.current_period,scope:'',brands:[],model_keys:[],base_revision:state.committee.base_revision,
+  }:null;
+  gridDraft={rows,modelRows,groups,owner,reason:'网页维护',mode:generationMode(),signature:state.generation_view?.rule_signature||'',saving:false,uncertain:false,request:null,error:'',committee};
   gridRender();$('#grid-owner')?.focus();
 }
 
@@ -909,15 +1007,50 @@ function importPlans() {
 function snapshotBackupLabel(backup) {
   return ({ready:'Excel已备份',error:'Excel待重试',pending:'Excel生成中'})[backup?.status]||'Excel待生成';
 }
+function committeeModelName(modelKey){
+  if(modelKey.startsWith('[')){
+    try{
+      const [type,parent,brand,model]=JSON.parse(modelKey);
+      if(type==='member')return `${brand} · ${model} · 单代际（${parent}）`;
+    }catch{/* The stored model key is still safe to display as text. */}
+  }
+  return modelKey.replace('|',' · ');
+}
+function committeeScopeName(decision){
+  if(decision.scope==='all')return '全部';
+  if(decision.scope==='brands')return (decision.brands||[]).join('、');
+  return (decision.model_keys||[]).map(committeeModelName).join('、');
+}
+function committeeHistory(items){
+  if(!state.committee)return '';
+  const records=items.map(item=>`<button class="snapshot-item${item.id===currentCommitteeDecision?.decision.id?' active':''}" type="button" data-committee-decision="${esc(item.id)}"><div><strong>${esc(item.period)} · ${committeeLevels[item.level]}</strong><span class="badge neutral">${item.model_count} 个车型</span></div><p>${esc(committeeScopeName(item))}</p><small>${esc(dateText(item.recorded_at))} · ${esc(item.owner)}</small></button>`).join('');
+  return `<section class="card page-section"><div class="panel-head"><h2>计委记录</h2></div>${records?`<div class="snapshot-list">${records}</div>`:'<div class="empty-state">暂无计委记录</div>'}</section>`;
+}
+function renderCommitteeDecision(detail){
+  const {decision,amounts,products=[],plans=[]}=detail;
+  const byId=new Map(products.map(product=>[product.id,product]));
+  const versions=plans.filter(row=>{const product=byId.get(row.product_id);return product&&!product.read_only&&!isModelPlan(product);});
+  const quantity=value=>value==null?'':fmt(value);
+  const modelName=row=>row.model_key?committeeModelName(row.model_key):`${row.brand} · ${row.model}`;
+  const table=`<div class="table-scroll" tabindex="0" aria-label="计委车型总量"><table class="detail-table"><thead><tr><th>品牌 / 车型</th><th>目标月</th><th>计委量</th></tr></thead><tbody>${amounts.map(row=>`<tr><td>${esc(modelName(row))}</td><td>${esc(row.month)}</td><td>${quantity(row.sop)}</td></tr>`).join('')}</tbody></table></div>`;
+  const details=versions.length?`<details class="committee-version-detail"><summary>版本明细</summary><div class="table-scroll" tabindex="0" aria-label="计委版本明细"><table class="detail-table"><thead><tr><th>品牌 / 车型</th><th>版本</th><th>目标月</th><th>计委量</th></tr></thead><tbody>${versions.map(row=>{
+    const product=byId.get(row.product_id);
+    return `<tr><td>${esc(committeeModelName(modelGroupKey(product)))}</td><td>${esc(product.version)}</td><td>${esc(row.month)}</td><td>${quantity(row.sop)}</td></tr>`;
+  }).join('')}</tbody></table></div></details>`:'';
+  $('#snapshot-detail').innerHTML=`<section class="card page-section committee-decision-detail"><div class="panel-head"><div><h2>${esc(decision.period)} · ${committeeLevels[decision.level]}</h2><p>${esc(committeeScopeName(decision))} · ${esc(dateText(decision.recorded_at))} · ${esc(decision.owner)}</p></div></div>${table}${details}</section>`;
+}
 async function historyPage() {
-  const [archive,backups]=await Promise.all([api('/api/snapshots'),api('/api/backups/status')]);
+  const [archive,backups,committees]=await Promise.all([
+    api('/api/snapshots'),api('/api/backups/status'),state.committee?api('/api/committee-decisions'):{items:[]},
+  ]);
   snapshotList=archive.items;
   if(currentSnapshot) currentSnapshot=await api(`/api/snapshots/${encodeURIComponent(currentSnapshot.snapshot.id)}`);
   $('#app').innerHTML=pageHeading('history')+
     `<div class="sync-strip ${backups.failed?'warn':''}"><div><strong>Excel备份 · 已生成 ${backups.ready}/${backups.total} 份</strong>${backups.failed?'<p>备份生成失败，等待重试</p>':backups.pending?'<p>备份生成中</p>':''}<small>${esc(backups.directory)}</small>${backups.last_error?`<p>${esc(backups.last_error)}</p>`:''}</div><div class="toolbar">${button('刷新备份状态','refresh-backups','small')}</div></div>
     <div class="two-col page-section"><section class="card"><div class="panel-head"><div><h2>快照档案</h2><p>${snapshotList.length} 份快照</p></div>${button('保存会议快照','create-snapshot','primary small')}</div>${snapshotList.length?`<div class="snapshot-list">${snapshotList.map(s=>`<button class="snapshot-item ${s.id===currentSnapshot?.snapshot?.id?'active':''}" data-snapshot="${esc(s.id)}"><div><strong>${esc(s.label||s.business_date)}</strong><span class="badge ${s.kind==='manual'?'good':'neutral'}">${s.kind==='sunday'?'周日考核':s.kind==='daily'?'每日快照':'会议快照'}</span></div><p>截点 ${dateText(s.cutoff_at)}</p><small>实际保存 ${dateText(s.created_at)} · ${s.plan_count??0} 条计划 · ${snapshotBackupLabel(s.excel_backup)}</small></button>`).join('')}</div>`:'<div class="empty-state">暂无快照</div>'}</section>
-    <section class="card"><div class="panel-head"><div><h2>两次快照比较</h2></div></div><div class="card-body"><div class="form-grid"><label class="field">比较基准<select id="snapshot-left"><option value="">选择较早快照</option>${snapshotList.map(s=>opt(String(s.id),`${s.label||s.business_date} · ${dateText(s.cutoff_at)}`,'' )).join('')}</select></label><label class="field">当前快照<select id="snapshot-right"><option value="">选择较新快照</option>${snapshotList.map(s=>opt(String(s.id),`${s.label||s.business_date} · ${dateText(s.cutoff_at)}`,'' )).join('')}</select></label></div><div class="dialog-actions">${button('查看变化','compare-snapshots','primary')}</div><div id="comparison-result" class="empty-state compact">暂无比较结果</div></div></section></div><section id="snapshot-detail"></section>`;
-  if(currentSnapshot) renderSnapshot(currentSnapshot);
+    <section class="card"><div class="panel-head"><div><h2>两次快照比较</h2></div></div><div class="card-body"><div class="form-grid"><label class="field">比较基准<select id="snapshot-left"><option value="">选择较早快照</option>${snapshotList.map(s=>opt(String(s.id),`${s.label||s.business_date} · ${dateText(s.cutoff_at)}`,'' )).join('')}</select></label><label class="field">当前快照<select id="snapshot-right"><option value="">选择较新快照</option>${snapshotList.map(s=>opt(String(s.id),`${s.label||s.business_date} · ${dateText(s.cutoff_at)}`,'' )).join('')}</select></label></div><div class="dialog-actions">${button('查看变化','compare-snapshots','primary')}</div><div id="comparison-result" class="empty-state compact">暂无比较结果</div></div></section></div>${committeeHistory(committees.items)}<section id="snapshot-detail"></section>`;
+  if(currentSnapshot)renderSnapshot(currentSnapshot);
+  else if(currentCommitteeDecision)renderCommitteeDecision(currentCommitteeDecision);
 }
 function renderSnapshot(d) {
   const s=d.snapshot; const prods=snapshotProducts(d),list=snapshotRows(d);
@@ -1030,6 +1163,13 @@ async function handleAction(action,el) {
   if(action==='edit-first')return bulkPlan();
   if(action==='bulk-plan'){if($('#edit-dialog').open)closeDialog();return bulkPlan();}
   if(action==='expand-all'){allExpanded=!allExpanded;expanded.clear();return gridDraft?gridRender():planning();}
+  if(action==='toggle-committee'){
+    showCommittee=!showCommittee;
+    try{localStorage.setItem(committeePreferenceKey,String(showCommittee));}catch{/* The current view is still updated. */}
+    gridRender();
+    $('[data-action="toggle-committee"]')?.focus({preventScroll:true});
+    return;
+  }
   if(action==='toggle-locks'){
     const scroll=$('.plan-card .table-scroll'),left=scroll?.scrollLeft||0;
     showLocks=!showLocks;localStorage.setItem(lockPreferenceKey,String(showLocks));planning();
@@ -1051,7 +1191,7 @@ async function handleAction(action,el) {
   if(action==='refresh-backups')return historyPage();
   if(action==='create-snapshot') {
     openDialog(`<form id="snapshot-form"><h2>保存会议快照</h2><label class="field">快照名称<input id="snapshot-label" value="${state.current_month} SOP会议" required maxlength="100"></label><div id="form-error" class="inline-error"></div><div class="dialog-actions">${button('取消','close-dialog')}<button class="button primary" type="submit">保存快照</button></div></form>`);
-    $('#snapshot-form').onsubmit=async e=>{e.preventDefault();const save=$('button[type="submit"]',e.target);save.disabled=true;try{const saved=await api('/api/snapshots',{label:$('#snapshot-label').value});currentSnapshot=saved;closeDialog();await historyPage();toast(saved.excel_backup?.status==='ready'?'会议快照与Excel备份已保存':'快照已保存，Excel备份正在生成或等待重试',saved.excel_backup?.status==='error');}catch(err){$('#form-error').textContent=err.message;save.disabled=false;}};return;
+    $('#snapshot-form').onsubmit=async e=>{e.preventDefault();const save=$('button[type="submit"]',e.target);save.disabled=true;try{const saved=await api('/api/snapshots',{label:$('#snapshot-label').value});currentSnapshot=saved;currentCommitteeDecision=null;closeDialog();await historyPage();toast(saved.excel_backup?.status==='ready'?'会议快照与Excel备份已保存':'快照已保存，Excel备份正在生成或等待重试',saved.excel_backup?.status==='error');}catch(err){$('#form-error').textContent=err.message;save.disabled=false;}};return;
   }
   if(action==='compare-snapshots')return compareSnapshots();
   if(action==='export-snapshot') {
@@ -1089,8 +1229,8 @@ document.addEventListener('click',async e=>{
     if(el.dataset.gridRemoveModel){gridRemoveModel(el.dataset.gridRemoveModel);return;}
     if('gridAddBrand' in el.dataset){gridAddRow(el.dataset.gridAddBrand,el.dataset.gridAddModel,el.dataset.gridAnchor);return;}
     if(el.dataset.expand){if(!gridLocked())toggleModel(el.dataset.expand);return;}
-    if(gridDraft&&!['grid-save','grid-cancel','grid-add','expand-all','toggle-locks'].includes(el.dataset.action)){toast('请先保存或取消表内修改，再进行其他操作',true);return;}
-    if(gridLocked()&&['expand-all','toggle-locks'].includes(el.dataset.action))return;
+    if(gridDraft&&!['grid-save','grid-cancel','grid-add','expand-all','toggle-locks','toggle-committee'].includes(el.dataset.action)){toast('请先保存或取消表内修改，再进行其他操作',true);return;}
+    if(gridLocked()&&['expand-all','toggle-locks','toggle-committee'].includes(el.dataset.action))return;
     if(el.dataset.hideLevel){hideRow(el.dataset.hideLevel,el.dataset.hideId,el.dataset.hideLabel);return;}
     if(el.dataset.restoreRow){delete hiddenRows[el.dataset.restoreRow];refreshHiddenRows();return;}
     if(el.dataset.catalogBind){requireWrite();bindProductSource(el.dataset.catalogBind);return;}
@@ -1100,15 +1240,50 @@ document.addEventListener('click',async e=>{
     if(el.dataset.range){range=el.dataset.range;planning();return;}
     if(el.dataset.edit){requireWrite();await editInGrid(el.dataset.edit,el.dataset.month);return;}
     if(el.dataset.detail){await showDetail(el.dataset.detail);return;}
-    if(el.dataset.snapshot){currentSnapshot=await api(`/api/snapshots/${encodeURIComponent(el.dataset.snapshot)}`);renderSnapshot(currentSnapshot);return;}
-    if(el.dataset.matchSnapshot){currentSnapshot=await api(`/api/snapshots/${encodeURIComponent(el.dataset.matchSnapshot)}`);page='history';await renderPage();return;}
+    if(el.dataset.snapshot||el.dataset.committeeDecision){
+      const request=++activeRequest,decision=el.dataset.committeeDecision;
+      const detail=await api(`/api/${decision?'committee-decisions':'snapshots'}/${encodeURIComponent(decision||el.dataset.snapshot)}`);
+      if(page!=='history'||request!==activeRequest)return;
+      currentSnapshot=decision?null:detail;
+      currentCommitteeDecision=decision?detail:null;
+      $$('[data-snapshot],[data-committee-decision]').forEach(button=>button.classList.toggle('active',button===el));
+      if(decision)renderCommitteeDecision(detail);else renderSnapshot(detail);
+      return;
+    }
+    if(el.dataset.matchSnapshot){currentSnapshot=await api(`/api/snapshots/${encodeURIComponent(el.dataset.matchSnapshot)}`);currentCommitteeDecision=null;page='history';await renderPage();return;}
     if(el.hasAttribute('data-close'))return closeDialog();
     if(el.dataset.action)await handleAction(el.dataset.action,el);
   }catch(err){toast(err.message,true);}
 });
 document.addEventListener('change',async e=>{
   try {
-    if(e.target.dataset.gridId||e.target.dataset.gridGroup||['grid-owner','grid-reason'].includes(e.target.id))return;
+    const control=e.target,decision=gridDraft?.committee;
+    if(decision&&!gridLocked()&&['grid-committee-level','grid-committee-period','grid-committee-scope'].includes(control.id)){
+      if(control.id==='grid-committee-level')decision.level=Number(control.value);
+      if(control.id==='grid-committee-period')decision.period=control.value;
+      if(control.id==='grid-committee-scope')decision.scope=control.value;
+      gridDraft.request=null;
+      if(control.id!=='grid-committee-period'){
+        gridRender();
+        $(`#${control.id}`)?.focus({preventScroll:true});
+      }
+      return;
+    }
+    if(decision&&!gridLocked()&&control.hasAttribute?.('data-committee-selection')){
+      const field=decision.scope==='brands'?'brands':'model_keys';
+      decision[field]=$$('[data-committee-selection]:checked').map(input=>input.value);
+      $('#grid-committee-count').textContent=String(decision[field].length);
+      gridDraft.request=null;
+      return;
+    }
+    if(control.dataset.gridId||control.dataset.gridGroup){
+      const options=$('#grid-committee-options');
+      if(decision?.level&&options&&(control.dataset.gridGroup||['brand','model'].includes(control.dataset.gridField))){
+        options.innerHTML=committeeSelectionControls();
+      }
+      return;
+    }
+    if(['grid-owner','grid-reason'].includes(control.id))return;
     if(gridDraft){toast('请先保存或取消表内修改',true);gridRender();return;}
     if(e.target.id==='saved-table-view'){const prior=selectedView;try{selectedView=e.target.value;viewNameDraft=null;if(selectedView)applyTableView();else planning();}catch(error){selectedView=prior;e.target.value=prior;throw error;}return;}
     if(e.target.id==='restore-hidden-row'){if(e.target.value){delete hiddenRows[e.target.value];refreshHiddenRows();}return;}

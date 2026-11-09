@@ -276,6 +276,10 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     self._json(store.history(query.get("product_id"), query.get("month")))
                 elif path == "/api/backups/status" and snapshot_backup:
                     self._json(snapshot_backup.status())
+                elif path == "/api/committee-decisions":
+                    self._json(store.committee_decisions())
+                elif path.startswith("/api/committee-decisions/"):
+                    self._json(store.get_committee_decision(path.removeprefix("/api/committee-decisions/")))
                 elif path == "/api/snapshots":
                     self._json(snapshot_backup.snapshot_list() if snapshot_backup else store.snapshots())
                 elif path.startswith("/api/snapshots/") and path.endswith("/excel") and snapshot_backup:

@@ -141,6 +141,9 @@ class SOPStore:
             self.db.close()
 
     def _schema(self):
+        from .committee import create_schema
+
+        create_schema(self.db)
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS product_catalog (
@@ -824,9 +827,18 @@ class SOPStore:
             return self._catalog_sales(data)
 
     def state(self):
+        from . import committee
+
         with self.lock:
             self.ensure_daily_snapshots()
+            committee_base = committee.revision(self)
             data = self.record_sales()
+            updated_base = committee.revision(self)
+            if updated_base != committee_base:
+                # The catalog may have just been synced. Capture the baseline before
+                # reading the projected catalog again, including member plan rows.
+                committee_base = updated_base
+                data = self._catalog_sales(self._read_source_sales())
             settings = self.settings()
             current = self.clock().astimezone(TZ)
             month = current.strftime("%Y-%m")
@@ -839,6 +851,7 @@ class SOPStore:
                 "months": month_range(month, end),
                 "history_months": [month_add(month, offset) for offset in (-3, -2, -1)],
                 "snapshot_summary": self.snapshot_summary(),
+                "committee": committee.state(self, month, committee_base),
             })
             return data
 
@@ -1349,6 +1362,18 @@ class SOPStore:
             current = self.clock().astimezone(TZ)
             # Manual snapshots include all completed writes up to the actual capture time.
             return {"ok": True, **self._snapshot(current, current.date(), "manual", text_field(label, "快照名称", 200) or "手动快照", inclusive=True)}
+
+    def committee_decisions(self):
+        from .committee import list_decisions
+
+        with self.lock:
+            return list_decisions(self)
+
+    def get_committee_decision(self, decision_id):
+        from .committee import get_decision
+
+        with self.lock:
+            return get_decision(self, decision_id)
 
     def snapshots(self):
         with self.lock:
