@@ -844,7 +844,9 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 .annual-search { position:relative; }
 .annual-search .plan-tool-icon { position:absolute; left:9px; color:#74869a; pointer-events:none; }
 .annual-search input { width:180px; min-height:32px; padding-left:30px; font-size:13px; }
-.display-toggles { gap:8px; flex-wrap:nowrap; }
+.display-toggles { gap:5px; flex-wrap:wrap; }
+.committee-toggles { display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }
+.committee-toggle-label { margin-right:2px; color:#65758a; font-size:12px; }
 .display-toggles .lock-toggle,.text-action { border-color:transparent; background:transparent; box-shadow:none; }
 .display-toggles .lock-toggle { padding:4px 5px; color:#425a76; }
 .display-toggles .lock-toggle[aria-pressed="true"] { background:transparent; border-color:transparent; color:#425a76; }
@@ -866,7 +868,6 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 .saved-view-strip .text-action:disabled { opacity:.5; }
 .sheet-tools .sheet-meta { margin:0 0 0 auto; font-size:11px; gap:6px 14px; }
 .sheet-meta .sheet-sync { font-size:11px; }
-.sheet-meta .committee-toggle { min-height:24px; padding:2px 6px; font-size:11px; }
 @media(max-width:1250px) {
   .annual-filters { flex:1 1 100%; }
   .plan-toolbar-actions { margin-left:0; justify-content:flex-start; }

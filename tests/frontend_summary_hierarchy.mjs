@@ -73,6 +73,54 @@ assert.deepEqual(versionRows,[['locks','a1'],['locks','a2'],['sop','a1'],['sop',
   'Expanded versions keep lock rows before plan rows.');
 assert.equal(run("sumPlan(products(),'2026-10','sop').value"),110);
 
+// Each previous committee level has its own control and full-year total.
+const legacyVisibility=vm.createContext({localStorage:{getItem:key=>key==='sop-show-committee'?'false':null}});
+vm.runInContext(source.split("document.addEventListener('click'")[0],legacyVisibility);
+assert.deepEqual(plain(vm.runInContext('showCommitteeLevels',legacyVisibility)),[false,false,false]);
+const newerVisibility=vm.createContext({localStorage:{getItem:key=>key==='sop-show-committee'?'false':key==='sop-show-committee-levels'?'[true,false,true]':null}});
+vm.runInContext(source.split("document.addEventListener('click'")[0],newerVisibility);
+assert.deepEqual(plain(vm.runInContext('showCommitteeLevels',newerVisibility)),[true,false,true],'The three new choices override the old preference.');
+run(`state.committee={previous_period:'2026-09',amounts:[
+  {level:1,model_key:parentKey,month:'2026-01',sop:100},
+  {level:1,model_key:parentKey,month:'2026-10',sop:0},
+  {level:1,model_key:parentKey,month:'2026-12',sop:20},
+  {level:2,model_key:parentKey,month:'2026-11',sop:5},
+  {level:3,model_key:parentKey,month:'2026-10',sop:0}
+]};indexData();planning()`);
+const committeeRow=level=>app.innerHTML.match(new RegExp(`<tr class="committee-row" data-committee-level="${level}" data-committee-model="[^\"]+"[^]*?<\\/tr>`))?.[0];
+assert.deepEqual(plain(run('showCommitteeLevels')),[true,true,true]);
+assert.match(app.innerHTML,/上期计委[^]*?data-committee-level="1"[^]*?data-committee-level="2"[^]*?data-committee-level="3"[^]*?data-action="toggle-wenjie"/);
+assert.match(app.innerHTML,/rowspan="5"/);
+assert.match(committeeRow(1),/data-plan-year="2026">120<\/td>/,'The rolling annual column includes January outside the visible M+6 window.');
+assert.match(committeeRow(3),/data-plan-year="2026">0<\/td>/,'Explicit zero stays visible.');
+const levelTwoCells=[...committeeRow(2).matchAll(/<td\b[^>]*>[^]*?<\/td>/g)].map(match=>match[0]);
+assert.match(levelTwoCells[5],/^<td class="number"><\/td>$/,'Undecided October stays blank.');
+assert.match(levelTwoCells[6],/>5<\/td>$/,'November keeps its partial decision.');
+await run("handleAction('toggle-committee',{dataset:{committeeLevel:'2'}})");
+assert.deepEqual(plain(run('showCommitteeLevels')),[true,false,true]);
+assert.equal(committeeRow(2),undefined);
+assert.match(app.innerHTML,/rowspan="4"/);
+assert.equal(storage.get('sop-show-committee-levels'),'[true,false,true]');
+run("range='annual';planYear='2026';planning()");
+assert.match(committeeRow(1),/data-plan-year="2026">120<\/td>/,'The annual view keeps the same full-year committee amount.');
+assert.match(committeeRow(3),/data-plan-year="2026">0<\/td>/);
+run("planYear='2027';planning()");
+assert.match(committeeRow(1),/data-plan-year="2027"><\/td><\/tr>$/,'A year with no prior decision remains blank.');
+run("range='rolling';bulkPlan();gridRow('summary-total').values['2026-10']='120'");
+await run("handleAction('toggle-committee',{dataset:{committeeLevel:'3'}})");
+assert.equal(run("gridRow('summary-total').values['2026-10']"),'120','Changing a level while editing must preserve the draft.');
+run('gridDraft=null');
+const currentView=plain(run('viewConfig()'));
+context.currentView=currentView;
+run("tableViews={active:'committee-view',views:[{id:'committee-view',name:'计委视图',config:currentView}]};selectedView='committee-view';planning()");
+assert.match(run('viewControls()'),/<option value="committee-view" selected/);
+run("restoreViewConfig({...currentView,showCommitteeLevels:undefined,showCommittee:false})");
+assert.deepEqual(plain(run('showCommitteeLevels')),[false,false,false],'An old saved view with the single switch off hides all three levels.');
+run("restoreViewConfig({...currentView,showCommitteeLevels:undefined,showCommittee:true})");
+assert.deepEqual(plain(run('showCommitteeLevels')),[true,true,true]);
+run("tableViews={active:'committee-view',views:[{id:'committee-view',name:'计委视图',config:{...currentView,showCommitteeLevels:undefined,showCommittee:true}}]};selectedView='committee-view'");
+assert.match(run('viewControls()'),/<option value="committee-view" selected/,'A legacy view stays selected after migration.');
+
 // Explicit summary values take precedence, including zero; clearing restores member sums.
 run("state.plans.find(p=>p.product_id==='summary-total').sop=120;indexData()");
 assert.equal(run("sumPlan(products(),'2026-10','sop').value"),150);
