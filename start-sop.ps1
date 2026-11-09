@@ -71,7 +71,7 @@ if (Test-Path -LiteralPath (Join-Path $sopSelectedEnvironment 'pyvenv.cfg') -Pat
 } else {
     Remove-Item Env:VIRTUAL_ENV -ErrorAction SilentlyContinue
 }
-$Host.UI.RawUI.WindowTitle = 'SOP计划工作台'
+$Host.UI.RawUI.WindowTitle = 'SOP计划管理'
 $sopServer = Join-Path $sopRoot 'server.py'
 Write-Host "使用 Python：$sopRuntime"
 

@@ -475,7 +475,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
 
 
 def runtime_options(argv=None):
-    parser = argparse.ArgumentParser(description="SOP计划工作台：保持窗口运行，关闭窗口即停止")
+    parser = argparse.ArgumentParser(description="SOP计划管理：保持窗口运行，关闭窗口即停止")
     parser.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
     parser.add_argument("--port", type=int, default=8876)
     parser.add_argument("--data-dir", type=Path)
@@ -567,7 +567,7 @@ def main():
         server.launch_mode = "gateway" if gateway else "console"
         server.RequestHandlerClass = make_handler(store, args.web_dir, args.port, workbook_sync,
                                                   snapshot_backup, source_refresh=source_refresh, gateway=gateway)
-        print(f"\nSOP计划工作台已就绪：{url}\n保持此窗口打开；关闭窗口或按 Ctrl+C 即停止。\n关闭浏览器页面不会停止工作台。\n", flush=True)
+        print(f"\nSOP计划管理已就绪：{url}\n保持此窗口打开；关闭窗口或按 Ctrl+C 即停止。\n关闭浏览器页面不会停止工作台。\n", flush=True)
         if args.open_browser:
             threading.Thread(target=open_workbench, args=(url,), name="open-browser", daemon=True).start()
         server.serve_forever(poll_interval=0.5)
@@ -583,7 +583,7 @@ def main():
             worker.join(timeout=2)
         if store is not None:
             store.close()
-        print("SOP计划工作台已停止。", flush=True)
+        print("SOP计划管理已停止。", flush=True)
     return 0
 
 
