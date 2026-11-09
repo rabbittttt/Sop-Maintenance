@@ -95,11 +95,8 @@ const chooseFile=(ui,file=context.validFile)=>{ui.input.files=[file];ui.input.on
 const conflict={product_id:'p1',month:'2026-10',baseline:100,workbook:120,database:110};
 let ui=setupDialog();
 assert.equal(ui.save.disabled,true);
-assert.match(ui.dialog.html,/含版本明细/);
-assert.match(ui.dialog.html,/无需版本列或导出标识/);
-assert.match(ui.dialog.html,/只导入非空计划（含0）/);
-assert.match(ui.dialog.html,/空白和缺行保留原值，不停用车型/);
-assert.match(ui.dialog.html,/带标识的导出表可识别真正修改/);
+assert.match(ui.dialog.html,/Excel文件（\.xlsx，最大 12 MB）/);
+assert.doesNotMatch(ui.dialog.html,/class="subtitle"|class="form-help"/);
 assert.doesNotMatch(ui.dialog.html,/请重新导出|请选择看板导出的含版本明细表/);
 chooseFile(ui);
 assert.equal(ui.save.disabled,false);

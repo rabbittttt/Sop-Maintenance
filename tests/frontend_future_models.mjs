@@ -49,7 +49,6 @@ await run("handleAction('grid-add',{dataset:{newModelGroup:'享界|已有车型 
 assert.equal(run("[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual).brand"),'享界','The new model inherits the current row brand.');
 assert.equal(run("[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual).model"),'','A new model does not reuse the old model name.');
 assert.match(html(),/data-new-row=/);
-assert.match(html(),/无锁单也可提前排量/);
 assertInlineAdditions(1);
 run("const newModel=[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual);newModel.brand='智界';newModel.model='筹备车型 2027款';newModel.values['2027-03']='123'");
 const payload=plain(run('gridPayload()'));

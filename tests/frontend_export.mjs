@@ -143,7 +143,6 @@ context.captureDetail=html=>{detailHtml=html;};
 context.fetch=async()=>({ok:true,json:async()=>({items:[]})});
 run("openDialog=captureDetail;state.current_month='2026-03';target='2026-02'");
 await vm.runInContext("showDetail('a1')",context);
-assert.match(detailHtml,/版本锁单占比按版本行合计计算/);
 assert.match(detailHtml,/47\.6%/);
 assert.match(detailHtml,/52\.4%/);
 run("state.current_month='2026-10';target='';selected=null");

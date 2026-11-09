@@ -51,7 +51,7 @@ serverState={...structuredClone(base),settings:{generation_mode:'summary'},
 release({ok:true});await changing;
 assert.equal(control.disabled,false);assert.equal(app.inert,false);assert.equal(control.value,'summary');
 assert.equal(control.focusCount,1);assert.equal(run('model'),'');assert.equal(run('matchProduct'),'');
-assert.match(app.innerHTML,/汇总代际计划由成员单代际自动相加，只读/);
+assert.doesNotMatch(app.innerHTML,/汇总代际计划由成员单代际自动相加/);
 assert.match(app.innerHTML,/部分成员暂无销量/);
 assert.equal(run("canEditProduct(state.products[0],'2026-10')"),false);
 assert.equal(run("canEditProduct(state.products[1],'2026-10')"),true);
@@ -142,7 +142,6 @@ status={status:'absent',generation_view:serverState.generation_view};
 await run('pollWorkbookStatus()');
 assert.equal(run('generationMode()'),'summary');
 assert.equal(run('generationViewError'),'');
-assert.match(app.innerHTML,/汇总代际计划由成员单代际自动相加，只读/);
 assert.doesNotMatch(app.innerHTML,/业务服务连接中断|代际范围暂不可用/);
 
 // Configuration failures are not connection retries and must replace the old POST error.

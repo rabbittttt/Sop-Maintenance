@@ -61,9 +61,9 @@ map.get('#export-versions').checked=false;map.get('#export-versions').onchange()
 map.get('#export-filtered').checked=true;map.get('#export-filtered').onchange();
 assert.match(map.get('#export-scope').textContent,/问界.*1 个车型/);
 assert.equal(map.get('button[type="submit"]').textContent,'导出车型计划');
-assert.match(map.get('#export-selection').textContent,/车型总量，可填写并导入/);
+assert.match(map.get('#export-selection').textContent,/已选 \d+ 个月/);
 assert.doesNotMatch(html,/只读车型汇总|不能回填/);
-assert.match(html,/取消明细后，直接填写车型行的月度计划量，仍可导回/);
+assert.doesNotMatch(html,/class="form-help"/);
 fail=true;
 await submit();
 assert.equal(submitted.includeLocks,true);

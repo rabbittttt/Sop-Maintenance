@@ -53,7 +53,7 @@ for(const r of detailRows) assert.equal((r.match(/class="(?:history|sop)-cell nu
 assert.ok(detailRows.slice(0,3).every(r=>!r.includes('data-edit=')));
 assert.match(detailRows[3], /data-edit="a" data-month="2026-08"[^]*?>0<\/button>/);
 assert.match(detailRows[4], /data-edit="b" data-month="2026-08"[^]*?>50<\/button>/);
-assert.match(detailRows[5], /data-edit="c" data-month="2026-09"[^]*?title="待维护，点击输入计划量"><span class="missing">—<\/span><\/button>/);
+assert.match(detailRows[5], /data-edit="c" data-month="2026-09"[^]*?title="待维护"><span class="missing">—<\/span><\/button>/);
 vm.runInContext("state.products.push({id:'model-total',model:'M5',version:modelPlanLabel,plan_level:'model'});planIndex.set('model-total|2026-08',{sop:100})",context);
 assert.equal(get("sumPlan(state.products,'2026-08','sop').value"),100);
 assert.equal(get("sumSales(state.products,'2026-08',salesIndex,true).value"),200,'Adding model plans must preserve the model lock source');
@@ -324,7 +324,7 @@ assert.match(screen.innerHTML,/data-action="toggle-locks" aria-pressed="false"/)
 assert.doesNotMatch(screen.innerHTML,/data-version="a"[^>]*data-plan-metric="locks"/);
 vm.runInContext("showLocks=true;expanded.add('问界|M5');planning()",screenContext);
 assert.match(screen.innerHTML,/data-action="toggle-locks" aria-pressed="true"/);
-assert.match(screen.innerHTML,/版本锁单最新来源月：2026\.08/);
+assert.match(screen.innerHTML,/版本锁单最新来源月：<strong>2026\.08<\/strong>/);
 assert.match(screen.innerHTML,/data-plan-metric="locks" data-version="a"[^]*?版本原值">33<\/td>/);
 assert.match(screen.innerHTML,/data-plan-metric="locks" data-version="b"[^]*?版本原值">77<\/td>/);
 assert.match(screen.innerHTML,/源表暂无该月版本锁单数/);
