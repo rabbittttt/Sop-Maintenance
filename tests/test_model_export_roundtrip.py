@@ -119,6 +119,24 @@ class ModelExportRoundtripTest(unittest.TestCase):
         self.assertEqual(self.import_file()["imported"], 0)
         self.assertEqual((self.value(parent), self.value("c")), (90, 8))
 
+    def test_export_from_previous_month_preserves_history_but_can_update_current_month(self):
+        pid = self.create_model()
+        self.export()
+        self.store.clock = lambda: datetime(2026, 12, 1, tzinfo=TZ)
+        self.assertEqual(self.import_file()["imported"], 0)
+        edit_cell(self.path, self.address("C 2026款", "2026-12"), 20)
+        self.assertEqual(self.import_file()["imported"], 1)
+        self.assertEqual(self.value(pid, "2026-12"), 20)
+
+        for amount in (81, None):
+            with self.subTest(amount=amount):
+                edit_cell(self.path, self.address("C 2026款"), amount)
+                edit_cell(self.path, self.address("C 2026款", "2026-12"), 21)
+                with self.assertRaisesRegex(ValidationError, "2026-10.*不可"):
+                    self.import_file("workbook")
+                self.assertEqual(self.value(pid), 80)
+                self.assertEqual(self.value(pid, "2026-12"), 20)
+
     def test_raw_null_parent_can_save_zero_and_same_file_clear_is_never_silently_ignored(self):
         parent = self.model_id("Together 2026款")
         self.export()

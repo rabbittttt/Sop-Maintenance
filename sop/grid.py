@@ -20,7 +20,7 @@ def _revision(value):
 
 def save_grid_batch(store, body):
     allowed = {"request_id", "owner", "reason", "notes", "generation_mode", "generation_rule_signature",
-               "changes", "catalog_changes", "entries", "committee"}
+               "changes", "catalog_changes", "entries", "committee", "historical_receipt_correction"}
     if not isinstance(body, dict) or set(body) - allowed:
         raise ValidationError("表格批量维护请求格式无效。")
     try:
@@ -36,6 +36,7 @@ def save_grid_batch(store, body):
         raise ValidationError("请填写维护人。")
     reason = text_field(body.get("reason") or "网页批量维护", "变更原因")
     notes = text_field(body.get("notes"), "备注", 5000)
+    receipt_month = validate_month(body["historical_receipt_correction"]) if "historical_receipt_correction" in body else None
     changes, edits, entries = (body.get(field, []) for field in ("changes", "catalog_changes", "entries"))
     if any(not isinstance(value, list) or len(value) > limit
            for value, limit in ((changes, 20000), (edits, 2000), (entries, 2000))):
@@ -150,6 +151,14 @@ def save_grid_batch(store, body):
             updated, deactivated = store._merge_workbook_catalog(trusted_edits, None, recorded_at, current_month)
             catalog = {p["id"]: p for p in store._catalog_items()}
             names = {catalog_name_key({**p, "model": product_display_model(p)}) for p in catalog.values() if not p.get("summary_generation")}
+            existing_models = {}
+            if receipt_month and entries:
+                for product in catalog.values():
+                    projection = visible.get(product["id"])
+                    if not projection or projection.get("read_only"):
+                        continue
+                    identity = catalog_name_key({**product, "model": product_display_model(product)})[:2]
+                    existing_models.setdefault((identity, generation_parent(product, rules)), []).append(product)
             entry_ids, created = {}, []
             summary_models = {(normalize_generation(name).partition(" ")[0], generation_display_model(name))
                               for name in rules["groups"]}
@@ -189,6 +198,7 @@ def save_grid_batch(store, body):
                 if not any(p["id"] == "new-grid-row" for p in provisional["products"]):
                     raise ValidationError("新增行不在可维护的单代际范围内。")
                 values, months = [], set()
+                model_products = existing_models.get((name[:2], parent), ()) if is_model_plan(labels) else ()
                 for cell in entry.get("plans", []):
                     if not isinstance(cell, dict) or set(cell) != {"month", "sop"}:
                         raise ValidationError("新增行计划格式无效。")
@@ -197,6 +207,9 @@ def save_grid_batch(store, body):
                         raise ValidationError("新增行月份重复或超出当前开放计划范围。")
                     months.add(month)
                     if sop is not None:
+                        if receipt_month and month < current_month and not any(
+                                store._plan_month_applies(product, month, current_month) for product in model_products):
+                            raise ValidationError(f"{month} 的实际入库量只能在已有车型或版本行修正。")
                         values.append((month, sop))
                 if len(ordinary) + len(values) > 20000:
                     raise ValidationError("一次最多保存20000个计划单元格。")
@@ -215,7 +228,8 @@ def save_grid_batch(store, body):
 
             prepared, _, _, _ = store._changes({"changes": ordinary, "owner": owner, "reason": reason, "notes": notes},
                                                "plan", products=catalog, allow_empty=True)
-            saved = store._apply_changes(prepared, "plan", owner, reason, notes)
+            saved = store._apply_changes(prepared, "plan", owner, reason, notes,
+                                         historical_receipt_correction=receipt_month)
             if created or updated:
                 store._record_catalog(owner, "网页批量维护车型与版本")
             result = {"ok": True, "items": saved, "entry_ids": entry_ids, "products": created,

@@ -29,7 +29,8 @@ class RoundtripE2ETest(unittest.TestCase):
         source.write_text(json.dumps({"meta": {}, "products": [
             {"id": "a", "brand": "问界", "model": "M5", "version": "Max"},
             {"id": "b", "brand": "问界", "model": "M5", "version": "Ultra"}], "sales": []}), encoding="utf-8")
-        store = SOPStore(root / "test.sqlite3", source, lambda: datetime(2026, 10, 25, 12, tzinfo=TZ))
+        now = datetime(2026, 1, 25, 12, tzinfo=TZ)
+        store = SOPStore(root / "test.sqlite3", source, lambda: now)
         self.addCleanup(store.close)
         def save(pid, month, value, forecast=330):
             row = store.db.execute("SELECT revision FROM plans WHERE product_id=? AND month=?", (pid, month)).fetchone()
@@ -39,6 +40,7 @@ class RoundtripE2ETest(unittest.TestCase):
             row = store.db.execute("SELECT sop,forecast FROM plans WHERE product_id=? AND month=?", (pid, month)).fetchone()
             return tuple(row) if row else (None, None)
         save("a", "2026-01", 100)
+        now = datetime(2026, 10, 25, 12, tzinfo=TZ)
         save("a", "2026-10", 10)
         save("a", "2026-12", 20)
         save("b", "2026-10", 5)

@@ -85,14 +85,19 @@ class ProductCatalogTest(unittest.TestCase):
         self.update(manual["id"], version="Max筹备版")
         self.assertFalse(self.product(manual["id"])["name_conflict"])
 
-    def test_deactivation_retains_future_plans_and_allows_historical_correction(self):
+    def test_deactivation_retains_plans_and_keeps_history_read_only(self):
+        october = self.current
+        self.current = datetime(2026, 9, 30, 12, tzinfo=TZ)
+        self.plan(month="2026-09", sop=0)
         self.plan(month="2027-01", sop=123)
+        self.current = october
         self.update(active=False)
-        self.assertEqual(self.store.state()["plans"][0]["sop"], 123)
+        self.assertEqual({p["month"]: p["sop"] for p in self.store.state()["plans"]}, {"2026-09": 0, "2027-01": 123})
         for month in ("2026-10", "2027-02"):
             with self.assertRaises(ValidationError):
                 self.plan(month=month)
-        self.plan(month="2026-09", sop=0)
+        with self.assertRaisesRegex(ValidationError, "2026-09.*历史月份"):
+            self.plan(month="2026-09", sop=1, revision=1)
         self.assertFalse(self.product()["active"])
         self.store.record_sales()
         self.assertFalse(self.product()["active"])
@@ -257,7 +262,9 @@ class ProductCatalogTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             self.plan(created["id"], "2026-09")
         self.plan(created["id"], "2026-10", 0)
-        self.plan(month="2026-01", sop=42)  # Missing source sales in Jan does not close it.
+        with self.assertRaisesRegex(ValidationError, "2026-01.*历史月份"):
+            self.plan(month="2026-01", sop=42)
+        self.plan(sop=42)  # Missing source sales this month does not close it.
 
     def test_inactive_end_is_fixed_even_when_later_form_sends_null_and_restore_clears_it(self):
         stopped = self.update(active=False, end_month=None)
@@ -266,20 +273,24 @@ class ProductCatalogTest(unittest.TestCase):
         still = self.update(version="归档Max", active=False, end_month=None)
         self.assertEqual(still["end_month"], "2026-09")
         with self.assertRaises(ValidationError):
-            self.plan(month="2026-10")
+            self.plan(month="2026-12")
         resumed = self.update(active=True, end_month="2026-09")
         self.assertIsNone(resumed["end_month"])
-        self.plan(month="2026-10")
+        self.plan(month="2026-12")
 
-    def test_lifecycle_changes_preserve_existing_values_and_allow_only_historical_correction(self):
+    def test_lifecycle_changes_preserve_existing_values_outside_the_new_range(self):
+        october = self.current
+        self.current = datetime(2026, 9, 30, 12, tzinfo=TZ)
         self.plan(month="2026-09", sop=0)
         self.plan(month="2027-01", sop=123)
+        self.current = october
         frozen = self.store.manual_snapshot("范围调整前")
         self.update(start_month="2026-10", end_month="2026-12")
-        self.plan(month="2026-09", sop=7, revision=1)
+        with self.assertRaisesRegex(ValidationError, "2026-09.*历史月份"):
+            self.plan(month="2026-09", sop=7, revision=1)
         with self.assertRaises(ValidationError):
             self.plan(month="2027-01", sop=124, revision=1)
-        self.assertEqual(next(p for p in self.store.state()["plans"] if p["month"] == "2027-01")["sop"], 123)
+        self.assertEqual({p["month"]: p["sop"] for p in self.store.state()["plans"]}, {"2026-09": 0, "2027-01": 123})
         self.assertEqual(self.store.matching("2026-09")["product_count"], 1)
         self.assertEqual(self.store.get_snapshot(frozen["snapshot"]["id"])["products"][0]["start_month"], "1900-01")
         self.update(start_month=None, end_month=None)

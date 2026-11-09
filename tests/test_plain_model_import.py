@@ -4,13 +4,14 @@ import http.client
 import json
 import threading
 import unittest
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import openpyxl
 
 from server import make_handler
 from sop.plan_scope import is_model_plan
-from sop.store import ValidationError
+from sop.store import TZ, ValidationError
 from tests import test_model_export_roundtrip as support
 
 
@@ -58,6 +59,23 @@ class PlainModelImportTest(unittest.TestCase):
         self.assertTrue(all(p['active'] for p in self.f.store.list_products()['items']))
         again = self.load()
         self.assertEqual((again['created'], again['imported']), (0, 0))
+
+    def test_historical_automatic_totals_are_references_and_only_current_plan_is_imported(self):
+        parent = self.f.model_id('Together 2026款')
+        self.f.save('c', 0)
+        self.f.store.clock = lambda: datetime(2026, 12, 1, tzinfo=TZ)
+        self.table([['智界', 'Together 2026款', 30, 17], ['智界', 'C 2026款', 0]])
+        result = self.load()
+        self.assertEqual((result['created'], result['imported']), (0, 1))
+        self.assertIsNone(self.f.value(parent))
+        self.assertIsNone(self.f.model_id('C 2026款'))
+        self.assertEqual(self.f.value(parent, '2026-12'), 17)
+
+        self.table([['智界', 'C 2026款', 1, 99]])
+        with self.assertRaisesRegex(ValidationError, r'C5（2026-10）.*不可修改'):
+            self.load('workbook')
+        self.assertIsNone(self.f.model_id('C 2026款'))
+        self.assertEqual(self.f.value('c'), 0)
 
     def test_future_models_without_sales_or_versions_can_be_added(self):
         self.table([['享界', 'Future 2027款', None, None, None, 123]])

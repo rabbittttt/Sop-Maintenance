@@ -10,7 +10,8 @@ const initial={current_month:'2026-10',plan_end:'2027-12',now:'2026-10-29',meta:
   products:[{id:'a',brand:'享界',model:'S9 2025款',catalog_model:'S9',source_generation:'享界 S9 2025款',version:'Max',revision:3},
     {id:'b',brand:'享界',model:'S9 2026款',catalog_model:'S9',source_generation:'享界 S9 2026款',version:'Ultra',revision:2},
     {id:'sum',brand:'智界',model:'合计 2026款',version:'Max',read_only:true,revision:0}],
-  plans:[{product_id:'a',month:'2026-10',sop:10,forecast:88,revision:4},{product_id:'b',month:'2026-10',sop:20,revision:5},{product_id:'b',month:'2027-12',sop:null,revision:6}],
+  plans:[{product_id:'a',month:'2026-10',sop:10,forecast:88,revision:4},{product_id:'b',month:'2026-10',sop:20,revision:5},{product_id:'b',month:'2027-12',sop:null,revision:6},
+    {product_id:'a',month:'2026-09',sop:15,revision:3}],
   sales:[],model_sales:[],shipments:[],workbook_sync:{status:'absent'}};
 let response=async()=>({ok:true,status:200,json:async()=>({ok:true,saved_count:1,created_count:1,deactivated_count:1})});
 const context=vm.createContext({document:{querySelector:s=>nodes.get(s)||null,querySelectorAll:()=>[]},
@@ -41,6 +42,25 @@ assert.equal(plain(run('gridPayload()')).entries[0].plans[0].sop,80);
 assert.equal(initial.plans[0].sop,10,'Typing a model total must preserve the saved version plan');
 run("gridDraft=null;bulkPlan();allExpanded=true;gridRender()");
 assert.match(nodes.get('#app').innerHTML,/data-grid-month="2026-10"/);
+assert.doesNotMatch(nodes.get('#app').innerHTML,/data-grid-month="2026-09"/);
+assert.match(nodes.get('#app').innerHTML,/计划量只读">15<\/td>/);
+assert.match(nodes.get('#app').innerHTML,/id="grid-historical-receipt-correction">按实际入库量修正/);
+assert.equal(run("gridPayload().historical_receipt_correction"),undefined);
+run("gridDraft.historicalReceiptCorrection=true;gridRender();gridRow('a').values['2026-09']=''");
+assert.match(nodes.get('#app').innerHTML,/id="grid-historical-receipt-correction" checked/);
+assert.match(nodes.get('#app').innerHTML,/data-grid-id="a" data-grid-month="2026-09"[^>]*实际入库量/);
+assert.match(nodes.get('#app').innerHTML,/data-grid-month="2026-09" data-grid-model="S9 2025款"/);
+assert.throws(()=>run('gridPayload()'),/实际入库量必须填写非负整数/);
+run("gridRow('a').values['2026-09']='0';gridRow(gridDraft.modelRows.get('享界|S9 2025款')).values['2026-09']='25'");
+const correction=plain(run('gridPayload()'));
+assert.equal(correction.historical_receipt_correction,'2026-10');
+assert.deepEqual(correction.changes,[{product_id:'a',month:'2026-09',sop:0,revision:3}]);
+assert.deepEqual(correction.entries[0].plans,[{month:'2026-09',sop:25}]);
+run("gridDraft.historicalReceiptCorrection=false;gridRender()");
+assert.doesNotMatch(nodes.get('#app').innerHTML,/data-grid-month="2026-09"/);
+assert.throws(()=>run('gridPayload()'),/已修改，请勾选/);
+run("delete gridRow('a').values['2026-09'];delete gridRow(gridDraft.modelRows.get('享界|S9 2025款')).values['2026-09']");
+assert.equal(run("gridPayload().historical_receipt_correction"),undefined);
 assert.match(nodes.get('#app').innerHTML,/车型＋年款/);
 assert.deepEqual(plain(run('[...gridDraft.rows.values()].filter(r=>!r.virtual).map(r=>r.id)')),['a','b']);
 await assert.rejects(run('load()'),/保存或取消/);
@@ -52,6 +72,11 @@ assert.equal(payload.changes[0].forecast,undefined);
 assert.equal(payload.catalog_changes[0].model,undefined,'The visible year must not rename the source model');
 
 run("gridRemoveRow('b');gridAddRow('享界','S9 2026款','享界|S9 2026款');const added=[...gridDraft.rows.values()].find(r=>r.isNew&&!r.virtual);added.version='新增';added.values['2026-10']='3';");
+run('gridDraft.historicalReceiptCorrection=true');
+const newRowHtml=run("gridNewRows('享界|S9 2026款',['2026-09','2026-10'])");
+assert.doesNotMatch(newRowHtml,/data-grid-month="2026-09"/);
+assert.match(newRowHtml,/data-grid-month="2026-10"/);
+run('gridDraft.historicalReceiptCorrection=false');
 payload=plain(run('gridPayload()'));
 assert.deepEqual(payload.catalog_changes.find(c=>c.id==='b').plan_revisions,{'2026-10':5,'2027-12':6});
 assert.equal(payload.changes.some(c=>c.product_id==='b'),false,'Deleted rows must not submit changed plans');

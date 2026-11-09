@@ -265,6 +265,16 @@ class CommitteeDecisionsTest(unittest.TestCase):
         self.assertEqual(self.amounts()[(1, self.older_r7, self.target)], 100)
         self.assertEqual(self.amounts()[(1, self.older_r7, self.next_target)], 105)
 
+    def test_committee_can_confirm_unchanged_amounts_in_a_closed_month(self):
+        self.now = datetime(2027, 1, 1, tzinfo=TZ)
+        old_plan = self.saved_plan("r7-pro")
+        result = self.store.save_grid_batch(self.confirm(
+            period=self.target, scope="models", models=[self.older_r7], end_month=self.target,
+        ))
+        self.assertEqual(result["saved_count"], 0)
+        self.assertEqual(self.saved_plan("r7-pro"), old_plan)
+        self.assertEqual(self.amounts(), {(1, self.older_r7, self.target): 100})
+
     def test_receipt_failure_rolls_back_confirmation_and_plan_in_the_same_transaction(self):
         request = self.confirm(changes=[self.edit("r7-pro", 90)])
         self.store.db.execute("""CREATE TEMP TRIGGER reject_committee_receipt BEFORE INSERT ON grid_batch_requests

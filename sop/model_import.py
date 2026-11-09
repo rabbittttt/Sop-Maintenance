@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from .plan_scope import MODEL_PLAN_LABEL, is_model_plan
+from .plan_scope import MODEL_PLAN_LABEL, is_model_plan, plan_total
 from .source_rules import normalize_generation
 from .store import TZ, ValidationError, catalog_name_key, horizon
 
@@ -36,6 +36,7 @@ def import_model_table(store, entries, *, choice, actor, fingerprint):
     current = store.clock().astimezone(TZ).strftime("%Y-%m")
     end = horizon(current, store.settings()["bridge_m6"])
     changes, new_entries, conflicts, targets, seen = [], [], [], [], set()
+    historical_plans = None
     for entry in entries:
         name = _name(entry)
         if name in seen:
@@ -51,8 +52,7 @@ def import_model_table(store, entries, *, choice, actor, fingerprint):
         if len(anchors) > 1:
             raise ValidationError("车型名称对应多个总量记录，请使用带导出标识的原表导入。")
         product = anchors[0] if anchors else None
-        if group and not any(not p.get("read_only") for p in group):
-            raise ValidationError("该车型目前只有自动汇总参考行，请刷新看板后使用车型计划表。")
+        read_only_group = bool(group) and all(p.get("read_only") for p in group)
         labels = {"brand": group[0]["brand"] if group else normalize_generation(entry["brand"]),
                   "model": group[0]["model"] if group else normalize_generation(entry["model"]),
                   "version": MODEL_PLAN_LABEL}
@@ -66,6 +66,19 @@ def import_model_table(store, entries, *, choice, actor, fingerprint):
             row = store.db.execute("SELECT * FROM plans WHERE product_id=? AND month=?", (product["id"], month)).fetchone() if product else None
             previous = dict(row) if row else {}
             database = previous.get("sop")
+            if month < current:
+                # An unchanged reference total must not become an explicit override.
+                historical_value = database
+                if historical_value is None:
+                    if historical_plans is None:
+                        historical_plans = {(row["product_id"], row["month"]): row for row in (
+                            *store.view_plans(sales), *sales.get("generation_members", {}).get("plans", []))}
+                    historical_value = plan_total(group, month, historical_plans)
+                if value != historical_value:
+                    raise ValidationError(f"{plan['cell']}（{month}）已是历史月份，SOP 计划量不可修改。")
+                continue
+            if read_only_group:
+                raise ValidationError("该车型目前只有自动汇总参考行，请刷新看板后使用车型计划表。")
             targets.append({"name": name, "month": month, "product_id": product["id"] if product else None,
                             "revision": previous.get("revision", 0), "sop": database,
                             "catalog": [(p["id"], p.get("revision", 0), p.get("active", True)) for p in group]})

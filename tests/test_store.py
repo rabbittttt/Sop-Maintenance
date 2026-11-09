@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
@@ -89,6 +89,26 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(self.store.history()["items"]), 1)
         with self.assertRaises(sqlite3.IntegrityError):
             self.store.db.execute("UPDATE events SET owner='changed'")
+
+    def test_elapsed_month_keeps_sop_and_rejects_a_mixed_save_at_business_midnight(self):
+        october, november = "2026-10", "2026-11"
+        self.current = datetime(2026, 10, 31, 15, 59, 59, tzinfo=timezone.utc)
+        self.assertEqual(self.save(self.plan(month=october, sop=125))["saved_count"], 1)
+        self.current = datetime(2026, 10, 31, 16, 0, tzinfo=timezone.utc)
+
+        for historical in (
+            self.plan(month=october, sop=0, revision=1),
+            self.plan(month=october, sop=None, revision=1),
+            self.plan(pid="b", month=october, sop=0),
+        ):
+            with self.subTest(historical=historical):
+                with self.assertRaisesRegex(ValidationError, "2026-10.*历史月份"):
+                    self.save(self.plan(month=november, sop=200), historical)
+                self.assertEqual([(p["month"], p["sop"]) for p in self.store.state()["plans"]], [(october, 125)])
+                self.assertEqual(len(self.store.history()["items"]), 1)
+
+        self.save(self.plan(month=november, sop=200), self.plan(month=october, sop=125, revision=1))
+        self.assertEqual([(p["month"], p["sop"]) for p in self.store.state()["plans"]], [(october, 125), (november, 200)])
 
     def test_concurrency_and_bulk_conflict_rolls_back(self):
         self.save(self.plan())

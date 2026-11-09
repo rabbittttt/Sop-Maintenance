@@ -98,7 +98,10 @@ class InlineStoreTest(unittest.TestCase):
         self.assertEqual(self.store.import_workbook_plans(body)["catalog_updated_count"], 0)
 
     def test_deleted_row_deactivates_and_retains_all_business_history(self):
+        october_clock = self.store.clock
+        self.store.clock = lambda: datetime(2026, 8, 26, 12, tzinfo=TZ)
         self.save("2026-08", 7)
+        self.store.clock = october_clock
         self.save("2027-12", 24)
         before = {name: self.rows(name) for name in ("plans", "shipments", "events", "snapshots")}
         revisions = {row["month"]: row["revision"] for row in self.store.db.execute("SELECT month,revision FROM plans WHERE product_id='a'")}

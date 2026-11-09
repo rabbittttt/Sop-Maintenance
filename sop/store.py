@@ -856,6 +856,15 @@ class SOPStore:
             })
             return data
 
+    def _plan_month_applies(self, product, month, current_month):
+        if (not product.get("start_month") or month >= product["start_month"]) and (
+                not product.get("end_month") or month <= product["end_month"]):
+            return True
+        return month < current_month and self.db.execute(
+            "SELECT 1 FROM plans WHERE product_id=? AND month=? AND (sop IS NOT NULL OR forecast IS NOT NULL)",
+            (product["id"], month),
+        ).fetchone() is not None
+
     def _changes(self, body, entity, products=None, allow_empty=False):
         if not isinstance(body, dict) or not isinstance(body.get("changes"), list) or not (0 if allow_empty else 1) <= len(body["changes"]) <= 20000:
             raise ValidationError("请提供 1 至 20000 条变更。")
@@ -882,13 +891,9 @@ class SOPStore:
                 current_month = self.clock().astimezone(TZ).strftime("%Y-%m")
                 product = products[pid]
                 if not product.get("active", True) and month >= current_month:
-                    raise ValidationError("已停用产品仅可修正历史月份；请先启用产品再维护当前或未来计划。")
-                in_lifecycle = (not product.get("start_month") or month >= product["start_month"]) and (not product.get("end_month") or month <= product["end_month"])
-                if not in_lifecycle:
-                    existing_plan = self.db.execute("SELECT forecast,sop FROM plans WHERE product_id=? AND month=?", (pid, month)).fetchone()
-                    historical_correction = month < current_month and existing_plan is not None and any(existing_plan[field] is not None for field in ("forecast", "sop"))
-                    if not historical_correction:
-                        raise ValidationError("该月份不在产品计划起止范围内；已有历史数量仍可修正。")
+                    raise ValidationError("已停用产品不能维护当前或未来计划，请先启用产品。")
+                if not self._plan_month_applies(product, month, current_month):
+                    raise ValidationError("该月份不在产品计划起止范围内。")
             revision = change.get("revision", 0)
             if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
                 raise ValidationError("版本号必须为非负整数。")
@@ -1224,7 +1229,7 @@ class SOPStore:
                 raise
             return {"ok": True, "items": saved, "saved_count": len(saved)}
 
-    def _apply_changes(self, changes, entity, owner, reason, notes):
+    def _apply_changes(self, changes, entity, owner, reason, notes, *, historical_receipt_correction=None):
         """Write validated rows inside the caller's transaction, with normal audit events."""
         table = "plans" if entity == "plan" else "shipments"
         prepared, conflicts = [], []
@@ -1237,7 +1242,18 @@ class SOPStore:
         if conflicts:
             raise ConflictError(conflicts)
         recorded_at, saved = stamp(self.clock()), []
+        current_month = recorded_at[:7]
+        if historical_receipt_correction is not None and historical_receipt_correction != current_month:
+            raise ValidationError("月份已切换，请刷新后重新核对实际入库量。")
         for key, row, before in prepared:
+            if entity == "plan" and row["month"] < current_month:
+                previous_sop = before["sop"] if before else None
+                if row["sop"] != previous_sop:
+                    if historical_receipt_correction is None:
+                        raise ValidationError(f"{row['month']} 已是历史月份，SOP 计划量不可修改。")
+                    if row["sop"] is None:
+                        raise ValidationError(f"{row['month']} 请填写实际入库量，无入库时填 0。")
+                    row["reason"] = "按实际入库量修正"
             row["revision"] += 1
             row["updated_at"] = recorded_at
             columns = list(row)

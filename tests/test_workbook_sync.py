@@ -456,11 +456,17 @@ class WorkbookSyncTest(unittest.TestCase):
         self.assertEqual(len(values),48)
         self.assertEqual(values["a\t2026-10"],0)
         self.assertFalse(any("2026款" in r.get("label_c","") for r in context["layout"]["sheets"][0]["rows"] if r.get("label_c")))
-        # January and February are real historical plan inputs, even when the
-        # first sales record was in August; annual totals must be maintainable.
-        edit_cell(self.path,self.cell(month="2026-01"),12)
-        self.assertEqual(self.sync.sync()["status"],"synced")
-        self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='a' AND month='2026-01'").fetchone()["sop"],12)
+        historical_cell = self.cell(month="2026-01")
+        edit_cell(self.path, historical_cell, 12)
+        edit_cell(self.path, self.cell(), 8)
+        status = self.sync.sync()
+        self.assertEqual(status["status"], "error")
+        self.assertIn("2026-01 已是历史月份", status["message"])
+        self.assertIsNone(self.store.db.execute("SELECT sop FROM plans WHERE product_id='a' AND month='2026-01'").fetchone())
+        self.assertEqual(self.current()["sop"], 0)
+        edit_cell(self.path, historical_cell, None)
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        self.assertEqual(self.current()["sop"], 8)
 
     def test_schema2_conflict_prevents_layout_migration(self):
         self.save(sop=50)
@@ -503,8 +509,12 @@ class WorkbookSyncTest(unittest.TestCase):
         row=next(r for r in context["layout"]["sheets"][0]["rows"] if r.get("product_id")=="a")
         self.assertEqual(row["label_c"],"后驱 Max")
         self.assertTrue(row["hidden"], "Inactive records remain in history and totals, but are hidden from the editable main table")
-        edit_cell(self.path,self.cell(month="2026-01"),7)
-        self.assertEqual(self.sync.sync()["status"],"synced",self.sync.status())
+        historical_cell = self.cell(month="2026-01")
+        edit_cell(self.path, historical_cell, 7)
+        status = self.sync.sync()
+        self.assertEqual(status["status"], "error")
+        self.assertIn("2026-01 已是历史月份", status["message"])
+        edit_cell(self.path, historical_cell, None)
         edit_cell(self.path,self.cell(),36)
         self.assertEqual(self.sync.sync()["status"],"error")
         self.assertEqual(self.current()["sop"],35)
@@ -573,7 +583,7 @@ class WorkbookSyncTest(unittest.TestCase):
         edit_cell(self.path,old_source_cell,None)
         self.assertEqual(restarted_again.sync()["status"],"synced",restarted_again.status())
 
-    def test_lifecycle_not_applicable_preserves_existing_zero_and_historical_correction(self):
+    def test_lifecycle_not_applicable_preserves_existing_zero_and_locks_history(self):
         target=self.store.save_products({"changes":[{"brand":"B","model":"Next model","version":"New","start_month":"2027-01"}]})["items"][0]
         self.assertEqual(self.sync.sync()["status"],"synced")
         _,context,_,_,values=self.sync._parse(self.path.read_bytes())
@@ -585,10 +595,14 @@ class WorkbookSyncTest(unittest.TestCase):
         self.assertIn("不可维护",self.sync.status()["message"])
         edit_cell(self.path,self.cell(target["id"]),None)
         self.assertEqual(self.sync.sync()["status"],"synced")
-        # A prior explicit zero remains data after a lifespan correction. A
-        # historic plan can be corrected; an existing future value stays locked.
-        self.store.save_plans({"owner":"测试","changes":[{"product_id":"a","month":"2026-01","sop":0,"forecast":None,"revision":0},
-                                                           {"product_id":"a","month":"2027-12","sop":50,"forecast":60,"revision":0}]})
+        # A prior explicit zero stays visible and read-only after a lifespan correction.
+        october_clock = self.store.clock
+        self.store.clock = lambda: datetime(2026, 1, 22, 12, tzinfo=TZ)
+        self.store.save_plans({"owner": "测试", "changes": [
+            {"product_id": "a", "month": "2026-01", "sop": 0, "forecast": None, "revision": 0},
+            {"product_id": "a", "month": "2027-12", "sop": 50, "forecast": 60, "revision": 0},
+        ]})
+        self.store.clock = october_clock
         product=next(p for p in self.store.read_sales()["products"] if p["id"]=="a")
         self.store.save_products({"changes":[{"id":"a","revision":product["revision"],"start_month":"2026-03","end_month":"2027-06"}]})
         self.assertEqual(self.sync.sync()["status"],"synced",self.sync.status())
@@ -596,8 +610,13 @@ class WorkbookSyncTest(unittest.TestCase):
         self.assertEqual(values["a\t2026-01"],0)
         self.assertNotIn("a\t2026-02",values)
         self.assertNotIn("a\t2027-12",values)
-        edit_cell(self.path,self.cell(month="2026-01"),1)
-        self.assertEqual(self.sync.sync()["status"],"synced",self.sync.status())
+        historical_cell = self.cell(month="2026-01")
+        edit_cell(self.path, historical_cell, None)
+        status = self.sync.sync()
+        self.assertEqual(status["status"], "error")
+        self.assertIn("2026-01 已是历史月份", status["message"])
+        self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='a' AND month='2026-01'").fetchone()["sop"], 0)
+        edit_cell(self.path, historical_cell, 0)
         edit_cell(self.path,self.cell(month="2027-12"),51)
         self.assertEqual(self.sync.sync()["status"],"error")
         self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='a' AND month='2027-12'").fetchone()["sop"],50)

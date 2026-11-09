@@ -205,11 +205,14 @@ tableRows = trRows(get("planRow(modelProducts,'M5','model','问界|M5',['2026-01
 assert.equal(tableRows.length, 1);
 assert.doesNotMatch(tableRows[0], /rowspan="2"|data-plan-metric="locks"/);
 assert.match(tableRows[0], /class="sticky-name"/);
-let versionRows = trRows(get("planVersionRows(modelProducts,['2026-01','2026-02'])"));
+let versionRows = trRows(get("planVersionRows(modelProducts,['2026-01','2026-02','2026-10','2026-11'])"));
 assert.deepEqual(versionRows.map(row => row.match(/data-version="([^"]+)"/)[1]), ['a1','a2']);
 assert.ok(versionRows.every(row => row.includes('data-plan-metric="sop"')));
-assert.match(versionRows[0], /data-edit="a1" data-month="2026-01"/);
-assert.match(versionRows[1], /data-edit="a2" data-month="2026-02"/);
+assert.match(versionRows[0], /计划量只读">0<\/td>/);
+assert.match(versionRows[1], /计划量只读">30<\/td>/);
+assert.ok(versionRows.every(row => !/data-edit="[^"]+" data-month="2026-0[12]"/.test(row)));
+assert.match(versionRows[0], /data-edit="a1" data-month="2026-10"/);
+assert.match(versionRows[1], /data-edit="a2" data-month="2026-11"/);
 run('showLocks=true');
 versionRows = trRows(get("planVersionRows(modelProducts,['2026-01','2026-02'])"));
 assert.deepEqual(versionRows.map(row => row.match(/data-plan-metric="([^"]+)"/)[1]), ['locks','locks','sop','sop']);

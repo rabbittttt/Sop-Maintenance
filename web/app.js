@@ -216,8 +216,9 @@ function toggleModel(id){
 }
 function gridCell(row,month){
   const value=Object.hasOwn(row.values,month)?row.values[month]:(row.baselines[month]?.sop??''),old=row.baselines[month]?.sop??'';
+  const label=month<state.current_month?'实际入库量':'SOP计划量';
   const fallback=row.isModel?(row.original?.summary_generation?row.baselines[month]?.auto_sop:sumPlan(allProducts().filter(p=>!isModelPlan(p)&&modelGroupKey(p)===row.group),month,'sop').value):null;
-  return `<input class="grid-quantity${String(value)!==String(old)?' changed':''}" data-grid-id="${esc(row.id)}" data-grid-month="${month}"${row.isModel?` data-grid-model="${esc(row.model)}"`:''} inputmode="numeric" value="${esc(value)}" aria-label="${esc(row.isModel?row.model:row.version||'新增版本')} ${month} SOP计划量" placeholder="${fallback==null?'—':`汇总${fmt(fallback)}`}" ${gridLocked()||row.deleted?'disabled':''}>`;
+  return `<input class="grid-quantity${String(value)!==String(old)?' changed':''}" data-grid-id="${esc(row.id)}" data-grid-month="${month}"${row.isModel?` data-grid-model="${esc(row.model)}"`:''} inputmode="numeric" value="${esc(value)}" aria-label="${esc(row.isModel?row.model:row.version||'新增版本')} ${month} ${label}" placeholder="${fallback==null?'—':`汇总${fmt(fallback)}`}" ${gridLocked()||row.deleted?'disabled':''}>`;
 }
 function committeeScopeModels(){
   const options=new Map();
@@ -301,8 +302,23 @@ function committeePayload(){
   }
   return {...request,[field]:[...new Set(draft[field].map(value=>choices.get(value)))]};
 }
-function gridToolbar(){if(!gridDraft)return '';return `<section class="grid-toolbar" aria-label="网页维护"><div class="toolbar"><label class="field inline-field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''} ${access.gateway?'readonly aria-readonly="true"':''}></label><label class="field inline-field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label>${committeeFields()}</div><div id="grid-committee-options">${committeeSelectionControls()}</div><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;}
-function gridNewRows(anchor,visible){if(!gridDraft)return '';return [...gridDraft.rows.values()].filter(row=>row.isNew&&!row.virtual&&row.anchor===anchor).map(row=>`<tr class="version-row metric-plan-row grid-new-row" data-new-row="${esc(row.id)}"><th class="sticky-name" scope="row">${gridLabel(row)}</th><td class="sticky-metric">SOP计划量</td>${visible.map(m=>`<td class="sop-cell number${m<state.current_month?' past-month':''}">${isPlanMonthOpen(m)?gridCell(row,m):'未开放'}</td>${range==='rolling'&&m.endsWith('-12')?'<td class="annual-total">保存后计算</td>':''}`).join('')}${range==='rolling'?'':'<td class="annual-total">保存后计算</td>'}</tr>`).join('');}
+function gridToolbar(){
+  if(!gridDraft)return '';
+  const correction=`<label class="checkbox-label"><input type="checkbox" id="grid-historical-receipt-correction"${gridDraft.historicalReceiptCorrection?' checked':''}${gridLocked()?' disabled':''}>按实际入库量修正</label>`;
+  return `<section class="grid-toolbar" aria-label="网页维护"><div class="toolbar"><label class="field inline-field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''} ${access.gateway?'readonly aria-readonly="true"':''}></label><label class="field inline-field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label>${correction}${committeeFields()}</div><div id="grid-committee-options">${committeeSelectionControls()}</div><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;
+}
+function gridNewRows(anchor,visible){
+  if(!gridDraft)return '';
+  const total='<td class="annual-total">保存后计算</td>';
+  return [...gridDraft.rows.values()].filter(row=>row.isNew&&!row.virtual&&row.anchor===anchor).map(row=>{
+    const cells=visible.map(month=>{
+      const past=month<state.current_month;
+      const content=past?'<span class="missing">—</span>':isPlanMonthOpen(month)?gridCell(row,month):'未开放';
+      return `<td class="sop-cell number${past?' past-month':''}">${content}</td>${range==='rolling'&&month.endsWith('-12')?total:''}`;
+    }).join('');
+    return `<tr class="version-row metric-plan-row grid-new-row" data-new-row="${esc(row.id)}"><th class="sticky-name" scope="row">${gridLabel(row)}</th><td class="sticky-metric">SOP计划量</td>${cells}${range==='rolling'?'':total}</tr>`;
+  }).join('');
+}
 function gridAddRow(b=brand,m='',anchor=''){if(!gridDraft||gridLocked()||gridDraft.groups.get(anchor)?.deleted)return;const group=gridDraft.groups.get(anchor);if(group){b=group.brand;m=group.model;}const id='new_'+gridUUID(),isModel=!anchor;gridDraft.rows.set(id,{id,isNew:true,isModel,brand:b||'',model:m||'',version:isModel?modelPlanLabel:'',anchor,parent_generation:group?.parent_generation,values:{},baselines:{},deleted:false});if(anchor)expanded.add(anchor);gridDraft.request=null;gridRender();$(`[data-grid-id="${id}"][data-grid-field="${isModel?'model':'version'}"]`)?.focus();}
 function gridRemoveRow(id){if(!gridDraft||gridLocked())return;const row=gridRow(id);if(!row)return;if(row.isNew)gridDraft.rows.delete(id);else row.deleted=!row.deleted;gridDraft.request=null;gridRender();}
 function gridQuantity(value){if(value===''||value==null)return null;if(!/^\d+$/.test(String(value).trim()))throw new Error('计划量只能填写非负整数，留空表示待维护');const number=Number(value);if(!Number.isSafeInteger(number)||number>1e12)throw new Error('计划量超出允许范围');return number;}
@@ -324,14 +340,24 @@ function gridPayload(){
     const plans=[];
     for(const [month,value] of Object.entries(row.values)){
       let sop;try{sop=gridQuantity(value);}catch(error){fail(row,month,error.message);}
-      if(row.isNew){if(sop!==null)plans.push({month,sop});}
-      else if(sop!==(row.baselines[month]?.sop??null))changes.push({product_id:row.id,month,sop,revision:row.baselines[month]?.revision||0});
+      if(sop===(row.baselines[month]?.sop??null))continue;
+      if(month<state.current_month){
+        if(!gridDraft.historicalReceiptCorrection){
+          $('#grid-historical-receipt-correction')?.focus();
+          throw new Error(`${month} 的历史计划量已修改，请勾选“按实际入库量修正”后保存`);
+        }
+        if(sop===null)fail(row,month,'实际入库量必须填写非负整数');
+      }
+      if(row.isNew)plans.push({month,sop});
+      else changes.push({product_id:row.id,month,sop,revision:row.baselines[month]?.revision||0});
     }
     if(row.isNew)entries.push({client_id:row.id,brand:row.brand.trim(),model:row.model.trim(),version:row.isModel?modelPlanLabel:row.version.trim(),...(row.isModel?{plan_level:'model'}:{}),...(row.parent_generation?{parent_generation:row.parent_generation}:{}),plans});
     else {const c={id:row.id,revision:row.original.revision||0};for(const field of ['brand','model','version']){const original=field==='model'?catalogModel(row.original):row.original[field];if(row[field].trim()!==original)c[field]=row[field].trim();}if(Object.keys(c).length>2)catalog_changes.push(c);}
   }
   const committee=committeePayload();
-  return {request_id:gridUUID(),owner:gridDraft.owner.trim(),reason:gridDraft.reason.trim(),generation_mode:gridDraft.mode,generation_rule_signature:gridDraft.signature,changes,catalog_changes,entries,...(committee?{committee}:{})};
+  return {request_id:gridUUID(),owner:gridDraft.owner.trim(),reason:gridDraft.reason.trim(),generation_mode:gridDraft.mode,
+    generation_rule_signature:gridDraft.signature,changes,catalog_changes,entries,
+    ...(gridDraft.historicalReceiptCorrection?{historical_receipt_correction:state.current_month}:{}),...(committee?{committee}:{})};
 }
 async function saveGrid(){
   if(!gridDraft||gridDraft.saving)return;let payload;try{payload=gridDraft.request||gridPayload();if(!payload.changes.length&&!payload.catalog_changes.length&&!payload.entries.length&&!payload.committee)return toast('没有需要保存的修改');}catch(error){gridDraft.error=error.message;$('#grid-error').textContent=error.message;return;}
@@ -473,11 +499,14 @@ function planMonths() {
 }
 function isPlanMonthOpen(month) { return (!state.plan_end||month<=state.plan_end)&&planMonths().includes(month); }
 function productApplies(p,month) { return (!p.start_month||month>=p.start_month)&&(!p.end_month||month<=p.end_month); }
-function canEditProduct(p,month) {
+function productPlanAvailable(p,month) {
   if(p.read_only)return false;
-  const row=planIndex.get(key(p.id,month));
-  const historicalCorrection=month<state.current_month&&(row?.sop!=null||row?.forecast!=null);
-  return isPlanMonthOpen(month)&&(p.active!==false||month<state.current_month)&&(productApplies(p,month)||historicalCorrection);
+  const past=month<state.current_month;
+  const row=past?planIndex.get(key(p.id,month)):null;
+  return (p.active!==false||past)&&(productApplies(p,month)||row?.sop!=null||row?.forecast!=null);
+}
+function canEditProduct(p,month) {
+  return month>=state.current_month&&isPlanMonthOpen(month)&&productPlanAvailable(p,month);
 }
 function yearMonths(year=planYear) { return Array.from({length:12},(_,i)=>`${year}-${String(i+1).padStart(2,'0')}`); }
 function planYears() { return [...new Set([state.current_month,...planMonths(),...(state.model_sales||[]).map(s=>s.month)].filter(Boolean).map(m=>m.slice(0,4)))].sort(); }
@@ -573,6 +602,8 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
   let labelContent=one?`<button class="row-link" data-detail="${p.id}">${esc(label)}</button>${p.read_only?'<small>自动汇总 · 只读</small>':p.active===false?'<small>已停用</small>':''}${p.name_conflict?'<small class="catalog-alert">同名待区分</small>':''}`:level==='model'?`<button class="row-toggle" data-expand="${esc(id)}" aria-expanded="${isOpen}"><span>${isOpen?'−':'+'}</span>${esc(label)} <em>${versionNote}</em></button>`:`<strong>${esc(label)}</strong> <small>${versionNote}</small>`;
   const modelDraft=level==='model'&&gridDraft?gridRow(gridDraft.modelRows.get(id)):null;
   const draftRow=one&&gridDraft?gridRow(p.id):modelDraft;
+  const canCorrectHistory=draftRow&&!isLock&&gridDraft.historicalReceiptCorrection;
+  const contributors=canCorrectHistory&&draftRow.virtual?allProducts().filter(product=>modelGroupKey(product)===id):[];
   if(draftRow&&one&&!isLock)labelContent=gridLabel(draftRow);
   if(modelDraft&&showName)labelContent=gridModelLabel(id,isOpen);
   if(gridDraft&&level==='brand'&&showName)labelContent+=button('新增车型','grid-add','small grid-brand-add',`data-new-model-brand="${esc(id)}"${id?` aria-label="新增车型（${esc(id)}）"`:''}${gridLocked()?' disabled':''}`);
@@ -586,11 +617,19 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
       cell=`<td class="history-cell number${past}" title="${m>state.current_month?'尚未发生':modelOnly?'源表仅提供车型锁单数，未分配至版本':actual.value==null?one?'源表暂无该月版本锁单数':'源表暂无该月车型锁单数':one?'源表“版本／数量”行，版本原值':actual.model_reference?'源表“交车锁单／数量”行，车型原值':'当月来源锁单数'}">${quantity(actual,'—')}</td>`;
     } else {
       const q=sumPlan(ps,m,'sop');
-      const open=isPlanMonthOpen(m)&&(!one||canEditProduct(p,m));
+      const open=isPlanMonthOpen(m)&&(!one||productPlanAvailable(p,m));
       const closedLabel=one&&p.read_only?'—':one&&!productApplies(p,m)?'未适用':one&&p.active===false?'—':'未开放';
-      cell=`<td class="sop-cell number${past}${open?'':' closed-month'}"${open?'':` title="${one&&p.read_only?'自动汇总的版本行只读，请展开单代际维护成员计划':one&&p.active===false?'版本已停用，已有计划保留':one&&!productApplies(p,m)?'此月不在版本适用月份内':'此月份不在已开放计划范围内'}"`}>${one&&open&&access.canWrite?`<button class="edit-cell" data-edit="${p.id}" data-month="${m}" aria-label="编辑${esc(p.version)} ${m} SOP计划${q.value==null?'（待维护）':''}" title="${q.value==null?'待维护':'编辑计划量'}">${quantity(q,'—')}</button>`:quantity(q,open?'—':closedLabel)}</td>`;
+      const title=past?'已过去月份，计划量只读':open?'':one&&p.read_only?'自动汇总的版本行只读，请展开单代际维护成员计划':one&&p.active===false?'版本已停用，已有计划保留':one&&!productApplies(p,m)?'此月不在版本适用月份内':'此月份不在已开放计划范围内';
+      cell=`<td class="sop-cell number${past}${open?'':' closed-month'}"${title?` title="${title}"`:''}>${one&&!past&&open&&access.canWrite?`<button class="edit-cell" data-edit="${p.id}" data-month="${m}" aria-label="编辑${esc(p.version)} ${m} SOP计划${q.value==null?'（待维护）':''}" title="${q.value==null?'待维护':'编辑计划量'}">${quantity(q,'—')}</button>`:quantity(q,open?'—':closedLabel)}</td>`;
     }
-    if(draftRow&&!isLock&&(modelDraft?isPlanMonthOpen(m)&&(!draftRow.original||canEditProduct(draftRow.original,m)):canEditProduct(p,m)))cell=`<td class="sop-cell number${past}">${gridCell(draftRow,m)}</td>`;
+    if(draftRow&&!isLock){
+      const editable=past
+        ? canCorrectHistory&&isPlanMonthOpen(m)&&(draftRow.original
+          ? productPlanAvailable(draftRow.original,m)
+          : contributors.some(product=>productPlanAvailable(product,m)))
+        : modelDraft?isPlanMonthOpen(m)&&(!draftRow.original||canEditProduct(draftRow.original,m)):canEditProduct(p,m);
+      if(editable)cell=`<td class="sop-cell number${past}">${gridCell(draftRow,m)}</td>`;
+    }
     return cell+(range==='rolling'&&m.endsWith('-12')?calendarPlanCell(ps,m.slice(0,4),field):'');
   }).join('');
   const nameCell=showName?`<th scope="row" class="sticky-name"${rowSpan>1?` rowspan="${rowSpan}"`:''}>${labelContent}</th>`:'';
@@ -757,13 +796,14 @@ function bulkPlan() {
     level:0,period:state.committee.current_period,scope:'',start_month:'',end_month:'',
     brands:[],model_keys:[],base_revision:state.committee.base_revision,
   }:null;
-  gridDraft={rows,modelRows,groups,owner,reason:'网页维护',mode:generationMode(),signature:state.generation_view?.rule_signature||'',saving:false,uncertain:false,request:null,error:'',committee};
+  gridDraft={rows,modelRows,groups,owner,reason:'网页维护',mode:generationMode(),signature:state.generation_view?.rule_signature||'',saving:false,uncertain:false,request:null,error:'',historicalReceiptCorrection:false,committee};
   gridRender();$('#grid-owner')?.focus();
 }
 
 function editorOptions(id,ps=products()) {return ps.filter(p=>!p.read_only).map(p=>opt(p.id,`${p.brand} · ${p.model} · ${p.version}`,id)).join('');}
 async function editInGrid(id,month=state.current_month){
   requireWrite();
+  if(month<state.current_month)return toast('已过去月份的计划量只读',true);
   const product=allProducts().find(p=>p.id===id);
   if(!product||!canEditProduct(product,month))return toast('此行当前不可维护，请核对代际和月份',true);
   if($('#edit-dialog')?.open)closeDialog();
@@ -775,6 +815,7 @@ async function editInGrid(id,month=state.current_month){
   $(`[data-grid-id="${id}"][data-grid-month="${month}"]`)?.focus();
 }
 function editPlan(id,month=target) {
+  if(month<state.current_month)return toast('已过去月份的计划量只读',true);
   if(!isPlanMonthOpen(month))return toast('此月份不在已开放计划范围内',true);
   const p=allProducts().find(p=>p.id===id); if(!p) return toast('请先选择一个版本',true);
   if(p.read_only)return toast('自动汇总的版本行只读，请展开单代际维护成员计划',true);
@@ -1278,6 +1319,15 @@ document.addEventListener('click',async e=>{
 document.addEventListener('change',async e=>{
   try {
     const control=e.target,decision=gridDraft?.committee;
+    if(gridDraft&&control.id==='grid-historical-receipt-correction'){
+      if(gridLocked())return;
+      gridDraft.historicalReceiptCorrection=control.checked;
+      gridDraft.request=null;
+      gridDraft.error='';
+      gridRender();
+      $('#grid-historical-receipt-correction')?.focus({preventScroll:true});
+      return;
+    }
     if(decision&&!gridLocked()&&['grid-committee-level','grid-committee-period','grid-committee-scope','grid-committee-start','grid-committee-end'].includes(control.id)){
       if(control.id==='grid-committee-level'){
         decision.level=Number(control.value);

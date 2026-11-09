@@ -28,9 +28,9 @@ assert.equal(get("sumSales([state.products[0]],'2026-08').value"), null);
 assert.equal(get("sumPlan(state.products,'2026-09','sop').value"), null);
 const row = get("planRow(state.products,'合计','total','',['2026-08'])");
 assert.match(row, /history-cell number[^]*?200/);
-assert.match(row, /sop-cell number past-month">50<\/td>/);
+assert.match(row, /sop-cell number past-month" title="已过去月份，计划量只读">50<\/td>/);
 assert.doesNotMatch(row, /<sup\b|†/);
-// All version locks precede all version plans, and edits retain the exact version/month.
+// All version locks precede all version plans, and historical quantities remain visible.
 vm.runInContext(`
   state.products = [
     {id:'a',generation:'g',model:'M5',version:'Max'},
@@ -50,10 +50,10 @@ assert.deepEqual(detailRows.map(r=>r.match(/data-plan-metric="([^"]+)"/)[1]),
   ['locks','locks','locks','sop','sop','sop']);
 assert.deepEqual(detailRows.map(r=>r.match(/data-version="([^"]+)"/)[1]), ['a','b','c','a','b','c']);
 for(const r of detailRows) assert.equal((r.match(/class="(?:history|sop)-cell number past-month"/g)||[]).length, 2);
-assert.ok(detailRows.slice(0,3).every(r=>!r.includes('data-edit=')));
-assert.match(detailRows[3], /data-edit="a" data-month="2026-08"[^]*?>0<\/button>/);
-assert.match(detailRows[4], /data-edit="b" data-month="2026-08"[^]*?>50<\/button>/);
-assert.match(detailRows[5], /data-edit="c" data-month="2026-09"[^]*?title="待维护"><span class="missing">—<\/span><\/button>/);
+assert.ok(detailRows.every(r=>!r.includes('data-edit=')));
+assert.match(detailRows[3], /计划量只读">0<\/td>/);
+assert.match(detailRows[4], /计划量只读">50<\/td>/);
+assert.match(detailRows[5], /计划量只读"><span class="missing">—<\/span><\/td>/);
 vm.runInContext("state.products.push({id:'model-total',model:'M5',version:modelPlanLabel,plan_level:'model'});planIndex.set('model-total|2026-08',{sop:100})",context);
 assert.equal(get("sumPlan(state.products,'2026-08','sop').value"),100);
 assert.equal(get("sumSales(state.products,'2026-08',salesIndex,true).value"),200,'Adding model plans must preserve the model lock source');
@@ -184,9 +184,11 @@ assert.equal(get('target'),'2028-01');
 vm.runInContext("selectPlanYear('2026');planning()",context);
 const annualHeaders=[...app.innerHTML.match(/<thead>[^]*?<\/thead>/)[0].matchAll(/<th\b[^]*?<\/th>/g)].map(m=>m[0]);
 assert.equal(annualHeaders.filter(h=>h.includes('past-month')).length,9);
-const pastEditable=get("planVersionRows([state.products[0]],['2026-08','2026-10','2026-11'])");
-assert.equal((pastEditable.match(/class="(?:history|sop)-cell number past-month"/g)||[]).length,2);
-assert.match(pastEditable,/data-edit="a" data-month="2026-08"/);
+const pastAndEditable=get("planVersionRows([state.products[0]],['2026-08','2026-10','2026-11'])");
+assert.equal((pastAndEditable.match(/class="(?:history|sop)-cell number past-month"/g)||[]).length,2);
+assert.doesNotMatch(pastAndEditable,/data-edit="a" data-month="2026-08"/);
+assert.match(pastAndEditable,/data-edit="a" data-month="2026-10"/);
+assert.match(pastAndEditable,/data-edit="a" data-month="2026-11"/);
 const calendarExport=JSON.parse(JSON.stringify(await vm.runInContext("downloadPlanExport({includeLocks:true,includeVersions:true,selectedMonths:months()})",context)));
 assert.equal(calendarExport.rows.length,8);
 assert.deepEqual(calendarExport.headers.filter(h=>/^\d{4}-\d{2}$/.test(h)),get('yearMonths()'));
@@ -258,7 +260,7 @@ vm.runInContext(`
 assert.deepEqual(get("sumSales(state.products,'2026-08')"),{value:200,known:2,total:3,model_reference:true});
 assert.equal(get("planMonths()[0]"),'2026-01');
 assert.equal(get("planMonths().at(-1)"),'2027-12');
-assert.equal(get("canEditProduct(state.products[1],'2026-09')"),true);
+assert.equal(get("canEditProduct(state.products[1],'2026-09')"),false);
 assert.equal(get("canEditProduct(state.products[1],'2026-10')"),false);
 assert.equal(get("canEditProduct(state.products[0],'2028-01')"),false);
 vm.runInContext("planIndex.set('a|2026-10',{sop:20});planIndex.set('future|2026-10',{sop:0})",context);
@@ -266,7 +268,10 @@ assert.deepEqual(get("sumPlan(state.products,'2026-10','sop')"),{value:20,known:
 vm.runInContext("planIndex.set('b|2026-10',{sop:30})",context);
 assert.deepEqual(get("sumPlan(state.products,'2026-10','sop')"),{value:50,known:3,total:3});
 assert.doesNotMatch(get("planMetricRow([state.products[1]],'Max','version','b',['2026-10'],'sop')"),/data-edit=/);
-assert.match(get("planMetricRow([state.products[1]],'Max','version','b',['2026-09'],'sop')"),/data-edit="b"/);
+vm.runInContext("planIndex.set('b|2026-09',{sop:29})",context);
+const inactivePastRow=get("planMetricRow([state.products[1]],'Max','version','b',['2026-09'],'sop')");
+assert.match(inactivePastRow,/计划量只读">29<\/td>/);
+assert.doesNotMatch(inactivePastRow,/data-edit=/);
 // A source model with a single version has model totals, never invented version actuals.
 vm.runInContext("state.products=[{id:'a',generation:'g'}]",context);
 assert.equal(get("sumSales(state.products,'2026-08').value"),null);
@@ -283,7 +288,7 @@ assert.equal(get("canEditProduct(state.products[1],'2026-12')"),false);
 assert.equal(get("canEditProduct(state.products[1],'2027-01')"),true);
 vm.runInContext("planIndex.set('future|2026-09',{sop:4})",context);
 assert.equal(get("annualQuantity(state.products,yearMonths('2026'),'sop').value"),124);
-assert.equal(get("canEditProduct(state.products[1],'2026-09')"),true);
+assert.equal(get("canEditProduct(state.products[1],'2026-09')"),false);
 // Source renaming keeps old-generation model history accessible without duplicate version values.
 vm.runInContext(`
   state.products=[{id:'a',generation:'new',source_generations:['g','new']}];

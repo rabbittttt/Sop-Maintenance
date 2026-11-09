@@ -153,6 +153,73 @@ class GridBatchTest(unittest.TestCase):
             with self.assertRaises(ValidationError): self.store.save_grid_batch(request)
             self.assertEqual(self.tables(), before)
 
+    def test_closed_month_rolls_back_grid_creation_and_allows_unchanged_history(self):
+        october, november = "2026-10", "2026-11"
+        with patch.object(self.store, "clock", return_value=datetime(2026, 11, 1, tzinfo=TZ)):
+            before = self.tables()
+            entry = {**self.entry(), "plans": [{"month": october, "sop": 0}]}
+            request = self.body(changes=[self.edit(month=november)], entries=[entry], catalog_changes=[self.delete()])
+            with self.assertRaisesRegex(ValidationError, "2026-10.*历史月份"):
+                self.store.save_grid_batch(request)
+            self.assertEqual(self.tables(), before)
+
+            result = self.store.save_grid_batch(self.body(changes=[self.edit(sop=10), self.edit(month=november)]))
+            self.assertEqual(result["saved_count"], 1)
+            self.assertEqual((self.plan(month=october)["sop"], self.plan(month=october)["revision"]), (10, 1))
+            self.assertEqual(self.plan(month=november)["sop"], 11)
+
+    def test_confirmed_receipt_correction_records_historical_and_current_reasons_separately(self):
+        october, november = "2026-10", "2026-11"
+        with patch.object(self.store, "clock", return_value=datetime(2026, 11, 1, tzinfo=TZ)):
+            changes = [self.edit(sop=0, month=october), self.edit(sop=18, month=november)]
+            with self.assertRaises(ValidationError):
+                self.store.save_grid_batch(self.body(changes=changes))
+            with self.assertRaises(ValidationError):
+                self.store.save_grid_batch(self.body(changes=changes, historical_receipt_correction=october))
+
+            result = self.store.save_grid_batch(self.body(
+                changes=changes, historical_receipt_correction="2026-11", reason="正常滚动调整",
+            ))
+            self.assertEqual(result["saved_count"], 2)
+            self.assertEqual((self.plan(month=october)["sop"], self.plan(month=october)["forecast"]), (0, 110))
+            self.assertEqual(self.plan(month=november)["sop"], 18)
+            historical = self.store.history("a", october)["items"][0]
+            self.assertEqual((historical["owner"], historical["reason"]), ("网页维护人", "按实际入库量修正"))
+            self.assertEqual(self.store.history("a", november)["items"][0]["reason"], "正常滚动调整")
+
+    def test_confirmed_receipt_correction_rejects_clearing_and_new_catalog_identity(self):
+        october, november = "2026-10", "2026-11"
+        with patch.object(self.store, "clock", return_value=datetime(2026, 11, 1, tzinfo=TZ)):
+            before = self.tables()
+            historical_values = [{"month": october, "sop": 0}]
+            requests = (
+                {"changes": [self.edit(sop=None, month=october)]},
+                {"entries": [{**self.entry(), "plan_level": "model", "plans": historical_values}]},
+                {"entries": [{**self.entry(model="C 2026款"), "plans": historical_values}]},
+            )
+            for fields in requests:
+                with self.subTest(fields=fields):
+                    changes = [self.edit(month=november), *fields.get("changes", [])]
+                    with self.assertRaises(ValidationError):
+                        self.store.save_grid_batch(self.body(
+                            changes=changes, entries=fields.get("entries", []), historical_receipt_correction="2026-11",
+                        ))
+                    self.assertEqual(self.tables(), before)
+
+    def test_confirmed_receipt_correction_can_materialize_an_existing_models_total(self):
+        october = "2026-10"
+        self.store.save_plans({"owner": "original", "changes": [
+            {"product_id": "c", "month": october, "sop": 12, "forecast": None, "revision": 0},
+        ]})
+        with patch.object(self.store, "clock", return_value=datetime(2026, 11, 1, tzinfo=TZ)):
+            entry = {**self.entry(model="C 2026款"), "version": "", "plan_level": "model",
+                     "plans": [{"month": october, "sop": 15}]}
+            result = self.store.save_grid_batch(self.body(entries=[entry], historical_receipt_correction="2026-11"))
+            pid = result["entry_ids"]["new"]
+            self.assertEqual(self.plan(pid, october)["sop"], 15)
+            self.assertEqual(self.plan("c", october)["sop"], 12)
+            self.assertEqual(self.store.history(pid, october)["items"][0]["reason"], "按实际入库量修正")
+
     def test_rules_changing_between_view_and_validation_leave_values_untouched(self):
         request = self.body(changes=[self.edit()])
         before = self.tables()
