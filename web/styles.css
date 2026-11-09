@@ -826,7 +826,8 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 
   .annual-sheet.grid-editing .table-scroll { max-height:65vh; }
 }
-@media print { .sheet-tools,.grid-row-actions { display:none!important; } }
+.grid-brand-add { margin-inline-start:6px; }
+@media print { .sheet-tools,.grid-row-actions,.grid-brand-add { display:none!important; } }
 
 /* Planning filters and actions share a toolbar. */
 .plan-toolbar-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px 12px; margin-left:auto; min-width:0; }

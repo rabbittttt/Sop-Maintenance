@@ -192,11 +192,10 @@ function gridLabel(row){
   const labels={brand:'品牌',model:'车型＋年款',version:'版本'};
   return `<div class="grid-row-labels${row.isModel?' model-labels':fields.length===1?' version-labels':''}">${fields.map(field=>`<label><span class="${fields.length===1?'visually-hidden':''}">${labels[field]}</span><input data-grid-id="${esc(row.id)}" data-grid-field="${field}" value="${esc(row[field])}"${row.isNew&&row.isModel?` placeholder="${field==='brand'?'填写品牌':'填写车型及年款，如 新车型 2027款'}"`:''} maxlength="200" aria-label="${labels[field]} ${esc(row.original?.version||'新增行')}" ${locked?'disabled':''}></label>`).join('')}<button type="button" class="button small grid-remove" data-grid-remove="${esc(row.id)}" title="删除按停用处理，保留历史" ${gridLocked()||gridDraft?.groups.get(row.group)?.deleted?'disabled':''}>${row.deleted?'撤销删除':row.isNew?'移除':'删除行'}</button></div>`;
 }
-function gridAddModelButton(b,id=''){if(!gridDraft)return '';return button('新增车型','grid-add','small',`data-new-model-brand="${esc(b)}" data-new-model-group="${esc(id)}"${gridLocked()?' disabled':''}`);}
 function gridModelLabel(id,isOpen){
   const group=gridDraft.groups.get(id),disabled=gridLocked()||group.deleted;
-  if(group.summary_generation)return `<strong>${esc(group.brand)} · ${esc(group.model)}</strong><div class="grid-row-actions">${gridAddModelButton(group.brand,id)}<button type="button" class="button small" data-expand="${esc(id)}" aria-expanded="${isOpen}" ${gridLocked()?'disabled':''}>${isOpen?'收起单代际':'展开单代际'}</button></div>`;
-  return `<div class="grid-row-labels model-labels">${['brand','model'].map(field=>`<label><span>${field==='brand'?'品牌':'车型＋年款'}</span><input data-grid-group="${esc(id)}" data-grid-group-field="${field}" value="${esc(group[field])}" maxlength="200" aria-label="${field==='brand'?'品牌':'车型＋年款'} ${esc(id)}" ${disabled?'disabled':''}></label>`).join('')}</div><div class="grid-row-actions">${group.parent_generation?'':gridAddModelButton(group.brand,id)}<button type="button" class="button small" data-expand="${esc(id)}" aria-expanded="${isOpen}" ${gridLocked()?'disabled':''}>${isOpen?'收起版本':'展开版本'}</button><button type="button" class="button small" data-grid-add-brand="${esc(group.brand)}" data-grid-add-model="${esc(group.model)}" data-grid-anchor="${esc(id)}" ${disabled?'disabled':''}>新增版本</button><button type="button" class="button small" data-grid-remove-model="${esc(id)}" title="停用该车型下全部计划行，包含隐藏版本；历史保留" ${gridLocked()?'disabled':''}>${group.deleted?'撤销删除':'删除车型'}</button></div>`;
+  if(group.summary_generation)return `<strong>${esc(group.brand)} · ${esc(group.model)}</strong><div class="grid-row-actions"><button type="button" class="button small" data-expand="${esc(id)}" aria-expanded="${isOpen}" ${gridLocked()?'disabled':''}>${isOpen?'收起单代际':'展开单代际'}</button></div>`;
+  return `<div class="grid-row-labels model-labels">${['brand','model'].map(field=>`<label><span>${field==='brand'?'品牌':'车型＋年款'}</span><input data-grid-group="${esc(id)}" data-grid-group-field="${field}" value="${esc(group[field])}" maxlength="200" aria-label="${field==='brand'?'品牌':'车型＋年款'} ${esc(id)}" ${disabled?'disabled':''}></label>`).join('')}</div><div class="grid-row-actions"><button type="button" class="button small" data-expand="${esc(id)}" aria-expanded="${isOpen}" ${gridLocked()?'disabled':''}>${isOpen?'收起版本':'展开版本'}</button><button type="button" class="button small" data-grid-add-brand="${esc(group.brand)}" data-grid-add-model="${esc(group.model)}" data-grid-anchor="${esc(id)}" ${disabled?'disabled':''}>新增版本</button><button type="button" class="button small" data-grid-remove-model="${esc(id)}" title="停用该车型下全部计划行，包含隐藏版本；历史保留" ${gridLocked()?'disabled':''}>${group.deleted?'撤销删除':'删除车型'}</button></div>`;
 }
 function gridChangeModel(id,field,value){
   const group=gridDraft?.groups.get(id);if(!group||group.summary_generation||gridLocked()||group.deleted||!['brand','model'].includes(field))return;
@@ -559,7 +558,7 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
   const draftRow=one&&gridDraft?gridRow(p.id):modelDraft;
   if(draftRow&&one&&!isLock)labelContent=gridLabel(draftRow);
   if(modelDraft&&showName)labelContent=gridModelLabel(id,isOpen);
-  else if(gridDraft&&level==='model'&&showName&&!ps.some(p=>p.parent_generation))labelContent=(ps.length?labelContent:'<strong>车型汇总</strong>')+`<div class="grid-row-actions">${gridAddModelButton(ps[0]?.brand||brand,id)}</div>`;
+  if(gridDraft&&level==='brand'&&showName)labelContent+=button('新增车型','grid-add','small grid-brand-add',`data-new-model-brand="${esc(id)}"${id?` aria-label="新增车型（${esc(id)}）"`:''}${gridLocked()?' disabled':''}`);
   if(!gridDraft&&level!=='total'&&showName)labelContent+=hiddenControl(level,id,one?`${p.model} · ${p.version}`:label);
   const cells=visibleMonths.map(m=>{
     const past=m<state.current_month?' past-month':'';
@@ -648,20 +647,19 @@ function planning() {
     previousPeriod?`上期计委 ${shortMonth(previousPeriod)}`:'上期计委',
     'toggle-committee','small lock-toggle committee-toggle',`aria-pressed="${showCommittee}"`,
   ):'';
-  let rows='',modelRowsVisible=0;
+  let rows='';
   for(const b of [...new Set([...brands,...ps.map(p=>p.brand)])]) {
     const bp=ps.filter(p=>p.brand===b);if(!bp.length||rowHidden('brand',b))continue;
     rows+=planRow(bp,b,'brand',b,visible);
     for(const m of [...new Set(bp.map(p=>p.model))]) {
       const mp=bp.filter(p=>p.model===m),id=`${b}|${m}`,opened=allExpanded||expanded.has(id)||(!gridDraft&&!!query);
       if(rowHidden('model',id))continue;
-      modelRowsVisible++;
       rows+=planRow(mp,m,'model',id,visible,opened);
       if(opened)rows+=planChildrenRows(mp,visible);
       rows+=gridNewRows(id,visible);
     }
   }
-  if(gridDraft&&!modelRowsVisible)rows+=planRow([],'车型汇总','model','',visible);
+  if(gridDraft&&!rows)rows+=planRow([],brand||'品牌','brand',brand,visible);
   rows+=gridNewRows('',visible);
   rows+=planRow(ps,brand?`${brand}合计`:showWenjie?'鸿蒙智行合计':'合计（不含问界）','total','',visible);
   const actions=`<div class="toolbar plan-actions">${gridDraft?button(gridDraft.saving?'正在保存…':gridDraft.uncertain?'重试确认保存':'保存修改','grid-save','primary small',gridDraft.saving?'disabled':'')+button('取消','grid-cancel','small',gridLocked()?'disabled':''):button(`${planToolIcon('edit')}网页维护`,'bulk-plan','primary small')}<div class="plan-file-actions">${button(`${planToolIcon('import')}导入Excel`,'import-plan','small')}${button(`${planToolIcon('export')}导出`,'export-plan','small')}</div></div>`;
@@ -1134,7 +1132,7 @@ async function handleAction(action,el) {
   if(access.gateway&&action==='open-workbook')throw new Error('请通过下载或导出使用Excel');
   if(action==='grid-save')return saveGrid();
   if(action==='grid-cancel'){if(gridLocked())return;gridDraft=null;planning();return;}
-  if(action==='grid-add')return gridAddRow(gridDraft?.groups.get(el?.dataset?.newModelGroup)?.brand??el?.dataset?.newModelBrand??brand);
+  if(action==='grid-add')return gridAddRow(el?.dataset?.newModelBrand??brand);
   if(action==='view-save')return saveTableView();
   if(action==='view-apply')return applyTableView();
   if(action==='view-delete'){tableViews.views=tableViews.views.filter(v=>v.id!==selectedView);if(tableViews.active===selectedView)tableViews.active='';selectedView='';viewNameDraft=null;persistTableViews();planning();return;}

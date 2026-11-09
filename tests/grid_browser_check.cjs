@@ -165,8 +165,14 @@ async function main() {
     // Cancel never writes; draft row removal affects only that new row.
     await click('bulk-plan');
     await cell('a','2026-10').fill('99');
-    await click('grid-add');
+    const addModels=page.locator('[data-action="grid-add"]');
+    assert.equal(await addModels.count(),3);
+    assert.deepEqual(await page.locator('tr.group-row [data-action="grid-add"]').evaluateAll(
+      buttons=>buttons.map(button=>button.dataset.newModelBrand).sort()
+    ),['享界','智界','问界'].sort());
+    await page.locator('tr.group-row [data-action="grid-add"][data-new-model-brand="享界"]').click();
     const removable=await page.locator('[data-new-row]').last().getAttribute('data-new-row');
+    assert.equal(await page.locator(`[data-grid-id="${removable}"][data-grid-field="brand"]`).inputValue(),'享界');
     await page.locator(`[data-grid-remove="${removable}"]`).click();
     assert.equal(await page.locator(`[data-new-row="${removable}"]`).count(),0);
     const callsBefore=savedRequests.length;
@@ -288,7 +294,7 @@ async function main() {
     assert.equal(await page.locator('[data-action="bulk-plan"]').isEnabled(),true);
     await page.locator('[data-action="bulk-plan"]').click();
     assert.equal(await page.locator('#edit-dialog').evaluate(el=>el.open),false);
-    await click('grid-add');
+    await page.locator('tr.group-row [data-action="grid-add"]').click();
     const firstId=await page.locator('[data-new-row]').getAttribute('data-new-row');
     for(const [field,value] of Object.entries({brand:'智界',model:'测试车型 2026款'})) {
       await page.locator(`[data-grid-id="${firstId}"][data-grid-field="${field}"]`).fill(value);
