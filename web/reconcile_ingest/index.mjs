@@ -5,7 +5,7 @@ export const MAX_POST_BYTES = 26 * 1024 * 1024;
 export const MAX_RECORDS = 10000;
 export const MAX_RAW_TEXT = 200000;
 
-export const { columnLabel, metricLabel, suggestMapping } = extraction;
+export const { columnLabel, metricLabel, metricFromHeader, suggestMapping } = extraction;
 let workbookParser;
 
 function loadWorkbookParser() {

@@ -1,7 +1,7 @@
 import {
   MAX_POST_BYTES, MAX_RAW_TEXT, MAX_RECORDS, checkFileSize, columnLabel, extractRows, extractText,
-  fileBase64, readLegacyBackup, readWorkbook, recognizeImage, suggestMapping,
-} from './index.mjs';
+  fileBase64, metricFromHeader, readLegacyBackup, readWorkbook, recognizeImage, suggestMapping,
+} from './index.mjs?v=2';
 
 const kinds = [['shared', '共享 Excel'], ['excel', '本地 Excel'], ['text', '消息'], ['image', '截图'], ['backup', '旧版备份']];
 const grains = [['month', '月'], ['week', '周'], ['day', '日']];
@@ -50,9 +50,10 @@ function applyProfile(sheet, mapping, metrics) {
   if (!profile || !['long', 'wide'].includes(profile.layout) || !profile.columns ||
       !Object.values(profile.columns).every(inBounds) || !Array.isArray(profile.periodColumns) ||
       !profile.periodColumns.every(inBounds)) return mapping;
+  const columnMetric = profile.layout === 'long' ? metricFromHeader(sheet.rows[mapping.headerRow][profile.columns.quantity]) : '';
   return {
     ...mapping, layout: profile.layout, columns: profile.columns, periodColumns: profile.periodColumns,
-    suggestedMetric: Object.hasOwn(metrics, profile.metric) ? profile.metric : mapping.suggestedMetric,
+    suggestedMetric: columnMetric || (Object.hasOwn(metrics, profile.metric) ? profile.metric : ''),
   };
 }
 
@@ -202,6 +203,13 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
     draft.records = null;
   }
 
+  function syncQuantityMetric() {
+    const {layout, headerRow, columns} = draft.mapping;
+    const metric = layout === 'long' ? metricFromHeader(sheet().rows[headerRow][columns.quantity]) : '';
+    draft.context.metric = Object.hasOwn(metrics, metric) ? metric : '';
+    draft.mapping.suggestedMetric = draft.context.metric;
+  }
+
   async function useFile(file, sharedId = '') {
     checkFileSize(file);
     if (draft.kind === 'backup') {
@@ -301,7 +309,7 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
     if (isWorkbook()) rememberMapping(sheet(), draft.mapping, draft.context.metric);
     closeDialog();
     await onImported(updated, draft.owner);
-    toast(isBackup ? '旧版资料已迁入' : '资料已加入待确认');
+    toast(isBackup ? '旧版资料已迁入' : updated.added_records ? '资料已加入待确认' : '没有新增记录');
   }
 
   host.addEventListener('input', event => {
@@ -339,7 +347,14 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
       render();
     } else if (element.name === 'layout') {
       draft.mapping.layout = element.value;
+      syncQuantityMetric();
       render();
+    } else if (element.name === 'col-quantity') {
+      syncQuantityMetric();
+      render();
+      query('[name="col-quantity"]')?.focus();
+    } else if (element.name === 'metric' && draft.mapping) {
+      draft.mapping.suggestedMetric = draft.context.metric;
     } else if (element.name === 'granularity') {
       draft.context.period = '';
       render();

@@ -964,6 +964,7 @@ input[aria-readonly="true"]{background:#f1f4f8;color:#4c5e73}
 .rec-table td.empty-state { text-align:center; }
 .rec-table tr:last-child td { border-bottom:0; }
 .rec-table small { display:block; max-width:300px; overflow:hidden; text-overflow:ellipsis; color:var(--muted); }
+.rec-table small.rec-review-error { color:var(--amber); }
 .rec-table button[data-rec="source"] { display:inline-block; max-width:min(260px, 75vw); overflow:hidden; text-overflow:ellipsis; }
 .rec-table .rec-wrap,.rec-wrap { white-space:normal; overflow-wrap:anywhere; }
 .rec-table .rec-wrap { min-width:210px; }

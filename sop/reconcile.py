@@ -135,7 +135,9 @@ class Reconciliation:
         candidates = [{**r, "model": labels.get(r["target_id"], r["model"])} for r in records]
         result = reconcile(baseline["records"] + candidates)
         issue_record_ids = {rid for issue in result["issues"] for rid in issue["record_ids"]}
-        return {**row, "sources": sources, "records": (baseline["records"] + records if include_baseline else records),
+        review = [{**record, "confirmation_errors": self._confirmation_errors(candidate, row)}
+                  if record["status"] != "confirmed" else record for record, candidate in zip(records, candidates)]
+        return {**row, "sources": sources, "records": (baseline["records"] + records if include_baseline else review),
                 "targets": [{key: t[key] for key in ("id", "label", "level")} for t in baseline["targets"]],
                 "result": result, "baseline_count": len(baseline["records"]), "metrics": METRICS,
                 "baseline_records": [r for r in baseline["records"] if r["id"] in issue_record_ids]}
@@ -381,6 +383,13 @@ class Reconciliation:
             end = period
         return end[:7] <= row["end_month"]
 
+    @classmethod
+    def _confirmation_errors(cls, record, row):
+        errors = validate_record(record)
+        if not errors and not cls._period_in_scope(record, row):
+            errors.append("记录期间须完整落在本轮月份范围内。")
+        return errors
+
     def update_records(self, round_id, body):
         owner, changes = _owner(body), body.get("changes")
         if not isinstance(changes, list) or not 1 <= len(changes) <= MAX_RECORDS:
@@ -409,11 +418,9 @@ class Reconciliation:
                 if record["target_id"] and target is None:
                     raise ValidationError("所选车型不在本轮基准目录中。")
                 if record["status"] == "confirmed":
-                    errors = validate_record({**record, "model": target["label"] if target else record["model"]})
+                    errors = self._confirmation_errors({**record, "model": target["label"] if target else record["model"]}, row)
                     if errors:
-                        raise ValidationError("；".join(errors))
-                    if not self._period_in_scope(record, row):
-                        raise ValidationError("记录期间须完整落在本轮月份范围内。")
+                        raise ValidationError(f"{record['source_ref']}：" + "；".join(errors))
                 if record != before:
                     record.update(updated_at=now, updated_by=owner)
                     self.db.execute("UPDATE reconcile_records SET payload=? WHERE id=?", (_encode(record), record["id"]))

@@ -149,8 +149,8 @@ def _period_issues(groups, records_by_id, add_issue):
     by_metric = defaultdict(list)
     for group in groups:
         start, end = _period_interval(group)
-        for metric, value in group["values"].items():
-            if value is not None:
+        for metric, record_ids in group["record_ids"].items():
+            if record_ids:
                 by_metric[group["target_id"], group["location"], metric].append((start, end, group))
     for (_, _, metric), spans in by_metric.items():
         active = []

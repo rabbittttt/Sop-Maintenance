@@ -125,9 +125,11 @@ export function createReconcilePage({
       const check = '<td><input type="checkbox" data-rec-select="' + esc(record.id) +
         '" aria-label="' + esc('选择记录 ' + (name || record.source_ref || '')) + '"' +
         (selectedRecords.has(record.id) ? ' checked' : '') + (!canWrite() ? ' disabled' : '') + '></td>';
+      const errors = record.confirmation_errors || [];
       return '<tr>' + check + cell(name || '未关联') + cell(detail.metrics[record.metric] || '—') +
         cell(record.period || '—') + cell(record.location || '—') + numericCell(record.quantity) +
-        '<td>' + statusBadge(record.status) + '</td>' +
+        '<td>' + statusBadge(record.status) + (errors.length ? '<small class="rec-review-error" title="' +
+          esc(errors.join('；')) + '">' + esc(errors[0]) + (errors.length > 1 ? ' 等 ' + errors.length + ' 项' : '') + '</small>' : '') + '</td>' +
         '<td>' + (source ? action('source', source.name, {id:source.id}) : '—') +
         '<small>' + esc(record.source_ref || '') + '</small></td>' +
         '<td>' + action('record', canWrite() ? '核对' : '查看', {id:record.id}) + '</td></tr>';
@@ -158,6 +160,14 @@ export function createReconcilePage({
     const showGap = resultFilter === 'all' || resultFilter === 'supply';
     const showStock = resultFilter === 'stock' || (resultFilter === 'all' &&
       groups.some(group => stockFields.some(key => hasMetric(group, key))));
+    function gapNote(group) {
+      if (resultFilter !== 'supply' || group.supply_gap != null || !hasMetric(group, 'supply_plan')) return '';
+      const fields = ['sop_plan', 'supply_plan'];
+      if (fields.some(key => group.conflicts?.includes(key))) return '数值待核对';
+      if (!hasMetric(group, 'sop_plan')) return '缺少同口径 SOP';
+      if (fields.some(key => group.partial_baseline_metrics?.includes(key))) return '基准部分覆盖';
+      return '合计范围不一致';
+    }
     const rows = visiblePage(groups).map(group => '<tr>' +
       cell(byTarget.get(group.target_id) || group.model) +
       cell(group.period + (group.granularity === 'month' ? '' : ' · ' + (grainNames[group.granularity] || ''))) +
@@ -169,7 +179,7 @@ export function createReconcilePage({
         return '<td class="rec-number">' + esc(fmt(value)) + (note ? '<small>' + esc(note) + '</small>' : '') + '</td>';
       }).join('') +
       (showGap ? '<td class="rec-number' + (group.supply_gap > 0 ? ' rec-shortfall' : '') + '">' +
-      esc(fmt(group.supply_gap)) + '</td>' : '') +
+      esc(fmt(group.supply_gap)) + (gapNote(group) ? '<small>' + esc(gapNote(group)) + '</small>' : '') + '</td>' : '') +
       (showStock ? numericCell(group.balance?.expected_closing) + numericCell(group.balance?.difference) : '') + '</tr>');
     return table(['车型', '期间', '库区', ...metricKeys.map(key => labels[key]), ...(showGap ? ['供应缺口'] : []),
       ...(showStock ? ['计算期末库存', '库存差额'] : [])], rows, detail ? '暂无可对账数据' : '暂无对账批次') + pager(groups.length);
@@ -268,27 +278,33 @@ export function createReconcilePage({
       '</select></label>';
   }
 
-  function formDialog(title, fields, submitLabel, save, {editable=true, afterSave}={}) {
+  function formDialog(title, fields, submitLabel, save, {editable=true, afterSave, onBack, confirmPending=false}={}) {
     openDialog('<h2>' + esc(title) + '</h2><form id="rec-form"><div class="rec-dialog-grid">' + fields +
       '</div><p class="field-error" role="alert"></p><div class="dialog-actions">' +
       '<button type="button" data-close class="button">' + (editable ? '取消' : '关闭') + '</button>' +
-      (editable ? '<button type="submit" class="button primary">' + esc(submitLabel) + '</button>' : '') +
+      (onBack ? '<button type="button" class="button" data-rec-back>返回关联记录</button>' : '') +
+      (confirmPending ? '<button type="submit" class="button secondary">保存修改</button>' : '') +
+      (editable ? '<button type="submit" class="button primary"' + (confirmPending ? ' data-confirm' : '') + '>' +
+        esc(confirmPending ? '确认记录' : submitLabel) + '</button>' : '') +
       '</div></form>');
     const form = document.getElementById('rec-form');
+    form.querySelector('[data-rec-back]')?.addEventListener('click', () => { closeDialog(); onBack(); });
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (!editable) return;
-      const submit = form.querySelector('button[type="submit"]');
+      const submits = [...form.querySelectorAll('button[type="submit"]')];
+      if (submits.some(button => button.disabled)) return;
       const errorField = form.querySelector('.field-error');
       const values = Object.fromEntries(new FormData(form));
-      submit.disabled = true;
+      if (event.submitter?.hasAttribute('data-confirm')) values.status = 'confirmed';
+      submits.forEach(button => { button.disabled = true; });
       errorField.textContent = '';
       try {
         await save(values);
         rememberOwner(values.owner?.trim());
       } catch (error) {
         errorField.textContent = error.message;
-        submit.disabled = false;
+        submits.forEach(button => { button.disabled = false; });
         return;
       }
       const dialog = form.closest('dialog');
@@ -330,7 +346,7 @@ export function createReconcilePage({
       });
   }
 
-  function recordDialog(record, baseline = false) {
+  function recordDialog(record, baseline = false, returnToIssue) {
     const editable = !baseline && canWrite();
     const disabled = editable ? '' : ' disabled';
     const textInput = (name, label, type='text') => '<label class="field">' + esc(label) +
@@ -344,7 +360,8 @@ export function createReconcilePage({
       '<pre class="rec-evidence">' + esc(record.original_text || '—') + '</pre></div>';
     const warnings = (record.warnings || []).length ? '<div class="rec-full rec-warnings">' +
       record.warnings.map(warning => '<div>' + esc(warning) + '</div>').join('') + '</div>' : '';
-    const fields = original + warnings +
+    const errors = (record.confirmation_errors || []).map(error => '<div>' + esc(error) + '</div>').join('');
+    const fields = original + (errors ? '<div class="rec-full rec-warnings">' + errors + '</div>' : '') + warnings +
       select('target_id', '车型', [['', '未关联' + (record.model ? ' · ' + record.model : '')], ...targets]) +
       select('metric', '指标', [['', '请选择'], ...Object.entries(detail.metrics)]) +
       textInput('period', '期间') + select('granularity', '粒度', Object.entries(grainNames)) +
@@ -355,21 +372,34 @@ export function createReconcilePage({
       const {owner, ...changes} = values;
       changes.quantity = values.quantity === '' ? null : Number(values.quantity);
       await saveChanges([{id:record.id, ...changes}], owner);
-    }, {editable});
+    }, {editable, onBack:returnToIssue, afterSave:returnToIssue, confirmPending:editable && record.status === 'pending'});
   }
 
   async function saveChanges(changes, owner) {
     detail = await api(roundPath() + '/records', {revision:detail.revision, owner, changes});
     selectedRecords.clear();
+    if (view === 'records' && status === 'pending' && changes.some(change => ['confirmed', 'excluded'].includes(change.status)) &&
+        !detail.records.some(record => record.status === 'pending')) {
+      view = 'results';
+      resultFilter = 'all';
+      pageNumber = 0;
+    }
     render();
     toast('记录已更新');
   }
 
   function bulk(nextStatus) {
     if (!selectedRecords.size) return toast('请选择记录', true);
-    const changes = [...selectedRecords].map(id => ({id, status:nextStatus}));
-    formDialog((nextStatus === 'confirmed' ? '确认' : '排除') + ' ' + changes.length + ' 条记录', ownerInput(),
-      nextStatus === 'confirmed' ? '确认' : '排除', values => saveChanges(changes, values.owner));
+    const confirming = nextStatus === 'confirmed';
+    const selected = detail.records.filter(record => selectedRecords.has(record.id));
+    const eligible = confirming ? selected.filter(record => !record.confirmation_errors?.length) : selected;
+    const skipped = selected.length - eligible.length;
+    if (!eligible.length) return toast('所选记录均有待补齐字段', true);
+    const changes = eligible.map(record => ({id:record.id, status:nextStatus}));
+    const label = confirming ? '确认' : '排除';
+    const note = skipped ? '<p class="rec-full rec-count">另有 ' + skipped + ' 条待补齐，仍保留在待确认</p>' : '';
+    formDialog(label + ' ' + changes.length + ' 条记录', note + ownerInput(), label,
+      values => saveChanges(changes, values.owner));
   }
 
   async function sourceDialog(id) {
@@ -403,6 +433,11 @@ export function createReconcilePage({
     const ids = new Set(issue.record_ids || []);
     const baselineIds = new Set((detail.baseline_records || []).map(record => record.id));
     const records = [...(detail.baseline_records || []), ...detail.records].filter(record => ids.has(record.id));
+    const returnToIssue = () => {
+      const remaining = detail.result.issues.find(item => item.type === issue.type && item.group_key === issue.group_key &&
+        item.record_ids.length === ids.size && item.record_ids.every(recordId => ids.has(recordId)));
+      if (remaining) issueDialog(remaining.id);
+    };
     openDialog('<h2>' + esc(issue.title) + '</h2><p class="rec-wrap">' + esc(issue.detail) +
       '</p><ul class="rec-issue-records">' + records.map(record => '<li>' +
         esc([baselineIds.has(record.id) ? 'SOP 基准' : detail.sources.find(source => source.id === record.source_id)?.name,
@@ -413,7 +448,7 @@ export function createReconcilePage({
       button.addEventListener('click', () => {
         const record = records.find(item => item.id === button.dataset.recIssueRecord);
         closeDialog();
-        recordDialog(record, baselineIds.has(record.id));
+        recordDialog(record, baselineIds.has(record.id), returnToIssue);
       });
     }
   }
@@ -422,13 +457,17 @@ export function createReconcilePage({
     if (!canWrite()) return;
     if (!detail) return newRound(initialKind);
     const current = detail;
-    const {openImportDialog} = await import('./reconcile_ingest/dialog.mjs?v=2');
+    const {openImportDialog} = await import('./reconcile_ingest/dialog.mjs?v=3');
     if (!isActive() || detail !== current) return;
     await openImportDialog({
       openDialog, closeDialog, api, serviceFetch, detail:current, owner:getOwner(), esc, toast, initialKind,
       onImported(updated, operator) {
         detail = updated;
         rememberOwner(operator);
+        if (!updated.added_records) {
+          render();
+          return;
+        }
         view = 'records';
         status = 'pending';
         sourceFilter = '';

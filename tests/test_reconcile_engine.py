@@ -101,3 +101,6 @@ class ReconcileEngineTests(unittest.TestCase):
         self.assertEqual({issue["type"] for issue in result["issues"]}, {"overlapping_periods", "invalid_record"})
         self.assertEqual(result["stats"]["invalid_confirmed_records"], 1)
         self.assertEqual(len(result["groups"]), 2)
+        conflicting_month = record("other-month", "sop_plan", 40, source_id="source-b")
+        result = reconcile([month, week, conflicting_month])
+        self.assertEqual({issue["type"] for issue in result["issues"]}, {"overlapping_periods", "source_conflict"})

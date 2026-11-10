@@ -49,6 +49,7 @@ function metricFrom(value) {
   }
   return '';
 }
+export { metricFrom as metricFromHeader };
 function dateParts(year, month, day) {
   const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
   if (date.getUTCFullYear() !== Number(year) || date.getUTCMonth() + 1 !== Number(month) || date.getUTCDate() !== Number(day)) return null;
@@ -219,6 +220,14 @@ function isSubtotal(row, columns) {
   const values = (keys.length ? keys.map(i => row[i]) : row.slice(0, 3)).map(clean);
   return values.some(value => /^(?:(?:.*[\s:：])?)(?:总计|合计|小计|汇总|subtotal|grand\s*total|total)$/i.test(value) || /(?:小计|合计|总计)$/.test(value));
 }
+
+function isModelTotal(row, columns, scope) {
+  if (scope !== 'total' || !Number.isInteger(columns.model) || !Number.isInteger(columns.variant)) return false;
+  const model = clean(row[columns.model]);
+  const variant = clean(row[columns.variant]);
+  return !!model && !/(?:小计|合计|总计|汇总)$/.test(model) && /^(?:总计|合计|汇总|grand\s*total|total)$/i.test(variant);
+}
+
 export function extractRows(rows, mapping = {}, context = {}) {
   const results = [], columns = mapping.columns || {}, headerRow = Number.isInteger(mapping.headerRow) ? mapping.headerRow : 0;
   if (!Array.isArray(rows)) return results;
@@ -227,7 +236,8 @@ export function extractRows(rows, mapping = {}, context = {}) {
   const selectedPeriods = unique((mapping.periodColumns || []).map(Number).filter(index => Number.isInteger(index) && index >= 0));
   for (let r = headerRow + 1; r < rows.length; r++) {
     const row = rows[r] || [];
-    if (!row.some(value => !blank(value)) || isSubtotal(row, columns)) continue;
+    const modelTotal = isModelTotal(row, columns, context.scope);
+    if (!row.some(value => !blank(value)) || isSubtotal(row, modelTotal ? { ...columns, variant: undefined } : columns)) continue;
     const rowWarnings = [], refs = [];
     function field(key) {
       const c = columns[key];
@@ -243,7 +253,8 @@ export function extractRows(rows, mapping = {}, context = {}) {
       if (key === 'model') rowWarnings.push('空白车型未自动沿用上一行；请核对合并范围或手动填写');
       return '';
     }
-    const model = field('model') || clean(context.model), variant = field('variant'), location = field('location') || clean(context.location), batch = field('batch');
+    const model = field('model') || clean(context.model), sourceVariant = field('variant');
+    const variant = modelTotal ? '' : sourceVariant, location = field('location') || clean(context.location), batch = field('batch');
     const metricValue = field('metric');
     const metric = metricValue ? metricFrom(metricValue) : context.metric || mapping.suggestedMetric || '';
     const periodValue = field('period') || context.period || '';
@@ -268,12 +279,24 @@ export function extractRows(rows, mapping = {}, context = {}) {
   return results;
 }
 
+function locatedModel(value, index) {
+  const name = value.trimStart();
+  return { start: index + value.length - name.length, end: index + value.length, name: name.replace(/\s+/g, ' ') };
+}
+
 function namedModels(text) {
-  const explicit = [...text.matchAll(/车型\s*[:：]\s*([^\s，,；;。]+)/g)].map(match => match[1]);
+  const explicit = [...text.matchAll(/车型\s*[:：]\s*([^\s，,；;。、/|｜]+)/g)]
+    .map(match => locatedModel(match[1], match.index + match[0].length - match[1].length));
   const codes = [...text.matchAll(/(?:问界|智界|享界|尊界|尚界|极氪|理想|小米)?\s*[A-Z]{1,3}\s?\d{1,4}[A-Z]?(?![A-Za-z0-9])(?:\s+\d{4}\s*款)?/g)]
     .filter(match => !/(?:批次(?:号|编号)?|VIN|车架号|车辆识别码|订单号|单号)\s*[:：]?\s*$/i.test(text.slice(0, match.index)))
-    .map(match => match[0].trim().replace(/\s+/g, ' ')).filter(model => !/^W\d{1,2}$/i.test(model));
-  return unique([...explicit, ...codes]);
+    .map(match => locatedModel(match[0], match.index)).filter(model => !/^W\d{1,2}$/i.test(model.name));
+  // A model code with its brand/year and a shorter explicit token can refer to the same text.
+  const labels = explicit.filter(label => {
+    const overlapping = codes.filter(code => code.start < label.end && label.start < code.end);
+    return overlapping.length === 0 || (overlapping.length === 1 && overlapping[0].end < label.end);
+  });
+  return unique([...labels, ...codes.filter(code => !labels.some(label =>
+    label.start <= code.start && code.end <= label.end))].map(model => model.name));
 }
 function allMetricHits(text) {
   const hits = [];
@@ -281,6 +304,23 @@ function allMetricHits(text) {
   hits.sort((a, b) => a.index - b.index || b.text.length - a.text.length);
   return hits.filter((hit, index, all) => !all.slice(0, index).some(previous => hit.index >= previous.index && hit.index < previous.index + previous.text.length));
 }
+
+const explicitAmountPattern = /(?<![\d.,，+\-−－])[+-]?(?:\d{1,3}(?:[,，]\d{3})+|\d+)(?:\.\d+)?\s*(?:万\s*)?(?:辆|台车|台|单)(?![A-Za-z])/g;
+
+function defaultAmount(segment, metric) {
+  if (!Object.hasOwn(LABELS, metric) || /约|大概|左右|上下|可能|暂估|待确认|至少|至多|不少于|不超过|以上|以下|以内|[<>≤≥]/.test(segment)) return null;
+  if (metric === 'adjustments' && /盘亏|减少|扣减|调减|减去/.test(segment)) return null;
+  const amounts = [...segment.matchAll(explicitAmountPattern)];
+  if (amounts.length !== 1) return null;
+  const [amount] = amounts;
+  const prefix = segment.slice(0, amount.index), suffix = segment.slice(amount.index + amount[0].length);
+  if (/\d\s*[-~～至到—/±]\s*$/.test(prefix) || /[-−－]\s+$/.test(prefix) ||
+      (/^[+-]/.test(amount[0]) && /(?:^|[^-\d])\d+\s+$/.test(prefix)) ||
+      /^\s*(?:多|余|来|到|至|~|～|—|±|\/|之间)/.test(suffix)) return null;
+  const parsed = parseQuantity(amount[0], metric);
+  return parsed.quantity === null ? null : parsed;
+}
+
 export function extractText(text, context = {}) {
   const records = [];
   clean(text).split(/\r?\n/).forEach((line, lineIndex) => {
@@ -288,6 +328,7 @@ export function extractText(text, context = {}) {
     const lineModels = namedModels(line), linePeriod = periodFrom(line, context);
     const dateTokens = line.match(/\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}(?:日|号)?)?|\d{1,2}月\d{1,2}日|本周|下周|上周|本月|下月|上月|今天|明天|昨天/g) || [];
     const linePeriodSafe = unique(dateTokens).length <= 1;
+    const lineHasOneAmount = Object.hasOwn(LABELS, context.metric) && [...line.matchAll(explicitAmountPattern)].length === 1;
     const segments = line.split(/[；;。]|(?<!\d)[，,]|[，,](?!\d{3}(?:\D|$))/).map(clean).filter(Boolean);
     for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
       const segment = segments[segmentIndex], localModels = namedModels(segment);
@@ -296,14 +337,20 @@ export function extractText(text, context = {}) {
       const resolvedPeriod = localPeriod.period || localPeriod.warnings.length ? localPeriod : linePeriodSafe && linePeriod.period ? linePeriod : periodFrom(context.period || '', context);
       const hits = allMetricHits(segment);
       const baseWarnings = [...resolvedPeriod.warnings];
+      const variant = segment.match(/配置\s*[:：]\s*([^\s，,；;。]+)/)?.[1] || '';
+      const location = segment.match(/(?:仓库|库位|地点)\s*[:：]\s*([^\s，,；;。]+)/)?.[1] || clean(context.location);
+      const batch = segment.match(/(?:批次|批次号|VIN)\s*[:：]\s*([^\s，,；;。]+)/i)?.[1] || '';
+      const scope = /全系|全部车型|总计|合计/.test(segment) || context.scope === 'total' ? 'total' : 'detail';
       if (lineModels.length > 1 && !localModels.length) baseWarnings.push('原行包含多个车型，此片段车型未自动继承');
       if (localModels.length > 1) baseWarnings.push('同一片段包含多个车型，数量归属需手动确认');
       if (!linePeriodSafe && !localPeriod.period) baseWarnings.push('原行包含多个日期，此片段周期未自动继承');
       if (hits.length === 0) {
+        const amount = model && lineHasOneAmount && (linePeriodSafe || localPeriod.period) ? defaultAmount(segment, context.metric) : null;
         records.push(candidate(context, {
-          sourceRef: `第 ${lineIndex + 1} 行 · 片段 ${segmentIndex + 1}`, model,
-          period: resolvedPeriod.period, granularity: resolvedPeriod.granularity, metric: '',
-          warnings: [...baseWarnings, '未识别出明确的数量与业务口径，原文已保留，请人工补全'], originalText: line,
+          sourceRef: `第 ${lineIndex + 1} 行 · 片段 ${segmentIndex + 1}`, model, variant, location, batch, scope,
+          period: resolvedPeriod.period, granularity: resolvedPeriod.granularity, metric: amount ? context.metric : '',
+          quantity: amount?.quantity ?? null, originalText: line,
+          warnings: [...baseWarnings, ...(amount ? amount.warnings : ['未识别出明确的数量与业务口径，原文已保留，请人工补全'])],
         }));
         continue;
       }
@@ -321,7 +368,7 @@ export function extractText(text, context = {}) {
           warnings.push('计划/预计入出库与实际发生分开记录；请人工确认口径');
         }
         if (['inbound_actual', 'outbound_actual', 'sales_actual'].includes(metric) && !/实际|实绩|已|完成/.test(hit.text)) warnings.push('原文未明确“实际”，请确认口径后再使用');
-        const after = fragment.slice(hit.text.length).replace(/^\s*[:：为是=]?\s*/, '');
+        const after = fragment.slice(hit.text.length).replace(/^\s*(?:(?:数量|台数|辆数|数|量)\s*)?[:：为是=]?\s*/, '');
         const amount = after.match(/^((?:约|大概|至少|至多)?\s*[+-]?(?:\d{1,3}(?:[,，]\d{3})+|\d+)(?:\.\d+)?\s*(?:[-~～至到—/]\s*\d+(?:\.\d+)?)?\s*(?:万)?\s*(?:辆|台车|台|单)?\s*(?:左右|以上|以下|待确认)?)/);
         const quantity = parseQuantity(amount?.[1] || '', metric);
         const remainder = amount ? after.slice(amount[0].length).trim() : '';
@@ -329,13 +376,10 @@ export function extractText(text, context = {}) {
         if (/可能|暂估|估计|待确认|左右|大概|约/.test(fragment)) { quantity.quantity = null; warnings.push('原数量带不确定表述，未当作明确数值'); }
         if (/盘亏/.test(hit.text) && quantity.quantity != null && quantity.quantity > 0) { quantity.quantity = null; warnings.push('盘亏需确认负向调整数，未自动改变符号'); }
         if (localModels.length > 1) quantity.quantity = null;
-        const variant = segment.match(/配置\s*[:：]\s*([^\s，,；;。]+)/)?.[1] || '';
-        const location = segment.match(/(?:仓库|库位|地点)\s*[:：]\s*([^\s，,；;。]+)/)?.[1] || clean(context.location);
-        const batch = segment.match(/(?:批次|批次号|VIN)\s*[:：]\s*([^\s，,；;。]+)/i)?.[1] || '';
         records.push(candidate(context, {
           sourceRef: `第 ${lineIndex + 1} 行 · 片段 ${segmentIndex + 1} · ${hit.text}`,
           model, variant, location, batch, period: hitPeriod.period, granularity: hitPeriod.granularity,
-          metric, quantity: quantity.quantity, scope: /全系|全部车型|总计|合计/.test(segment) ? 'total' : context.scope === 'total' ? 'total' : 'detail',
+          metric, quantity: quantity.quantity, scope,
           warnings: [...warnings, ...quantity.warnings], originalText: line,
         }));
       });

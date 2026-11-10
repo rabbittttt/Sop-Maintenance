@@ -69,6 +69,24 @@ class ReconcileHTTPTest(unittest.TestCase):
         return {"source_ref": "供货!D2", "original_text": "=1+1", "model": "R7 2027款", "period": "2026-11",
                 "granularity": "month", "metric": metric, "quantity": amount, "scope": "total"}
 
+    def test_review_identifies_blocked_rows_before_confirmation(self):
+        with self.running() as (http, _):
+            round_id = self.api(http, body={"name": "月度核对", "start_month": "2026-11", "end_month": "2026-11"})["id"]
+            path = "/" + round_id
+            detail = self.api(http, path + "/import", {"revision": 1,
+                "source": {"name": "供货消息", "type": "text", "raw_text": "供应 2600 辆"},
+                "records": [self.record("supply_plan", 2600),
+                            {**self.record("supply_plan", None), "source_ref": "供货!D3"},
+                            {**self.record("supply_plan", 100), "source_ref": "供货!D4", "period": "2026-12"}]})
+            valid, missing, outside = detail["records"]
+            self.assertEqual(valid["confirmation_errors"], [])
+            self.assertTrue(any("数量缺失" in error for error in missing["confirmation_errors"]))
+            self.assertTrue(any("月份范围" in error for error in outside["confirmation_errors"]))
+            rejected = self.api(http, path + "/records", {"revision": detail["revision"],
+                "changes": [{"id": valid["id"], "status": "confirmed"}, {"id": outside["id"], "status": "confirmed"}]}, 400)
+            self.assertIn(outside["source_ref"], rejected["error"])
+            self.assertTrue(all(record["status"] == "pending" for record in self.api(http, path)["records"]))
+
     def test_round_reuses_sop_shows_conflict_exports_and_persists(self):
         with self.running() as (http, store):
             def save_plan(quantity, revision):
