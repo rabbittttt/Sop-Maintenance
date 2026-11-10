@@ -3,7 +3,7 @@ import {
   fileBase64, readLegacyBackup, readWorkbook, recognizeImage, suggestMapping,
 } from './index.mjs';
 
-const kinds = [['excel', 'Excel'], ['text', '消息'], ['image', '截图'], ['backup', '旧版备份']];
+const kinds = [['shared', '共享 Excel'], ['excel', '本地 Excel'], ['text', '消息'], ['image', '截图'], ['backup', '旧版备份']];
 const grains = [['month', '月'], ['week', '周'], ['day', '日']];
 const scopes = [['total', '合计'], ['detail', '明细']];
 const columns = [
@@ -68,7 +68,7 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
   const roundPath = '/api/reconcile/' + encodeURIComponent(detail.id);
   const draft = {
     kind: kinds.some(([kind]) => kind === initialKind) ? initialKind : 'excel',
-    owner: owner || '', context: { ...contextDefaults }, name: '', text: '', shared: [],
+    owner: owner || '', context: { ...contextDefaults }, name: '', text: '', shared: null,
     shared_id: '', file: null, sheets: [], sheetIndex: 0, mapping: null, records: null,
     imports: null, busy: false, saving: false, error: '', progress: '', controller: null,
   };
@@ -80,6 +80,7 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
   const query = selector => host.querySelector(selector);
   const readValue = name => query('[name="' + name + '"]')?.value;
   const sheet = () => draft.sheets[draft.sheetIndex];
+  const isWorkbook = () => draft.kind === 'excel' || draft.kind === 'shared';
   const option = (value, label, selected) =>
     `<option value="${esc(value)}" ${String(value) === String(selected) ? 'selected' : ''}>${esc(label)}</option>`;
   const select = (name, label, options, selected, emptyLabel) =>
@@ -102,9 +103,12 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
   }
 
   function workbookFields() {
-    const fileField = `<label class="field"><span class="field-label">本地 Excel / CSV</span><input name="file" type="file" accept=".xlsx,.xls,.csv"></label>`;
-    const sharedField = select('shared-id', '共享目录', draft.shared.map(file => [file.id, file.name]), draft.shared_id, draft.shared.length ? '选择文件' : '暂无文件');
-    if (!draft.mapping) return fileField + sharedField;
+    const shared = draft.shared || [];
+    const sourceField = draft.kind === 'shared'
+      ? select('shared-id', '共享目录', shared.map(file => [file.id, file.name]), draft.shared_id,
+        shared.length ? '选择文件' : draft.busy ? '读取共享目录…' : '暂无文件')
+      : `<label class="field"><span class="field-label">本地 Excel / CSV</span><input name="file" type="file" accept=".xlsx,.xls,.csv"></label>`;
+    if (!draft.mapping) return sourceField;
     const selected = sheet(), mapping = draft.mapping;
     const header = selected.rows[mapping.headerRow] || [];
     const choices = header.map((value, index) => [index, columnLabel(index) + (value === null || value === '' ? '' : ' · ' + String(value).slice(0, 80))]);
@@ -112,7 +116,7 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
       .map(([key, label]) => select('col-' + key, label, choices, mapping.columns[key] ?? '', '未选'));
     const wide = mapping.layout === 'wide'
       ? `<label class="field full"><span class="field-label">期间列</span><select name="period-columns" multiple size="4">${choices.map(([key, label]) => `<option value="${key}" ${mapping.periodColumns.includes(key) ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>` : '';
-    return fileField + sharedField +
+    return sourceField +
       '<span class="muted full">' + esc(draft.file.name) + '</span>' +
       select('sheet', '工作表', draft.sheets.flatMap((item, index) => item.rows.length > 1 ? [[index, item.name]] : []), draft.sheetIndex) +
       input('header', '表头行', mapping.headerRow + 1, 'number', 'min="1" max="' + Math.max(1, selected.rows.length - 1) + '"') +
@@ -125,7 +129,7 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
   }
 
   function sourceFields() {
-    if (draft.kind === 'excel') return workbookFields();
+    if (isWorkbook()) return workbookFields();
     if (draft.kind === 'text') return textarea('消息原文');
     if (draft.kind === 'backup') return '<label class="field full"><span class="field-label">旧版 JSON 备份</span><input name="file" type="file" accept=".json"></label>';
     return `<label class="field"><span class="field-label">截图文件</span><input name="file" type="file" accept="image/png,image/jpeg,image/webp"></label>
@@ -206,14 +210,14 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
       return;
     }
     if (draft.kind === 'image') verifyImage(file);
-    const sheets = draft.kind === 'excel' ? await readWorkbook(file) : [];
-    if (draft.kind === 'excel' && !sheets.some(item => item.rows.length > 1)) throw new Error('没有可导入的工作表。');
+    const sheets = isWorkbook() ? await readWorkbook(file) : [];
+    if (isWorkbook() && !sheets.some(item => item.rows.length > 1)) throw new Error('没有可导入的工作表。');
     draft.file = file;
     draft.shared_id = sharedId;
     draft.name = file.name;
     draft.records = null;
     draft.sheets = sheets;
-    if (draft.kind === 'excel') chooseSheet(sheets.findIndex(item => item.rows.length > 1));
+    if (isWorkbook()) chooseSheet(sheets.findIndex(item => item.rows.length > 1));
     if (draft.kind === 'image') draft.text = '';
   }
 
@@ -236,13 +240,24 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
     }
   }
 
+  function showKind() {
+    if (draft.kind !== 'shared' || draft.shared !== null) {
+      render();
+      return;
+    }
+    void run(async () => {
+      const data = await api(sharedPath);
+      draft.shared = Array.isArray(data?.files) ? data.files : [];
+    }, { progress: '读取共享目录…' });
+  }
+
   function previewRecords() {
     draft.error = '';
     draft.records = null;
     try {
       const context = { ...draft.context, asOf: draft.context.as_of };
       let records;
-      if (draft.kind === 'excel') {
+      if (isWorkbook()) {
         const selected = sheet(), mapping = draft.mapping;
         if (!selected || !mapping) throw new Error('请选择 Excel 文件。');
         if (mapping.layout === 'wide' && !mapping.periodColumns.length) throw new Error('请选择期间列。');
@@ -274,16 +289,16 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
       if (!draft.records) throw new Error('请先预览候选记录。');
       body.source = {
         name: draft.name || (draft.kind === 'text' ? '消息原文' : draft.file?.name),
-        type: draft.kind, as_of: draft.context.as_of,
+        type: isWorkbook() ? 'excel' : draft.kind, as_of: draft.context.as_of,
       };
-      if (draft.kind !== 'excel') body.source.raw_text = draft.text.trim();
+      if (!isWorkbook()) body.source.raw_text = draft.text.trim();
       if (draft.shared_id) body.source.shared_id = draft.shared_id;
       else if (draft.file) body.source.content_base64 = await fileBase64(draft.file);
       body.records = draft.records;
     }
     if (new Blob([JSON.stringify(body)]).size > MAX_POST_BYTES) throw new Error('导入内容超过 26 MB，请分批导入。');
     const updated = await api(roundPath + (isBackup ? '/restore' : '/import'), body);
-    if (draft.kind === 'excel') rememberMapping(sheet(), draft.mapping, draft.context.metric);
+    if (isWorkbook()) rememberMapping(sheet(), draft.mapping, draft.context.metric);
     closeDialog();
     await onImported(updated, draft.owner);
     toast(isBackup ? '旧版资料已迁入' : '资料已加入待确认');
@@ -305,7 +320,7 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
       resetContent();
       void run(() => useFile(file), { progress: '读取资料…' });
     } else if (element.name === 'shared-id' && element.value) {
-      const item = draft.shared.find(file => file.id === element.value);
+      const item = draft.shared?.find(file => file.id === element.value);
       if (!item) return;
       resetContent();
       void run(async () => {
@@ -344,7 +359,7 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
       draft.kind = button.dataset.importKind;
       draft.context = { ...contextDefaults, as_of: draft.context.as_of };
       draft.error = '';
-      render();
+      showKind();
     } else if (button.dataset.importCommand === 'preview') {
       previewRecords();
     } else if (button.dataset.importCommand === 'ocr' && draft.file) {
@@ -386,13 +401,5 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
     dialog.removeEventListener('cancel', preventCancel);
     draft.controller?.abort();
   }, { once: true });
-  render();
-  api(sharedPath).then(data => {
-    draft.shared = Array.isArray(data?.files) ? data.files : [];
-    if (active() && draft.kind === 'excel' && !draft.busy) {
-      const selector = query('[name="shared-id"]');
-      if (selector) selector.innerHTML = option('', draft.shared.length ? '选择文件' : '暂无文件', draft.shared_id) +
-        draft.shared.map(file => option(file.id, file.name, draft.shared_id)).join('');
-    }
-  }).catch(() => {});
+  showKind();
 }

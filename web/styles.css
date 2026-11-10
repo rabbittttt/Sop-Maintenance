@@ -950,6 +950,8 @@ input[aria-readonly="true"]{background:#f1f4f8;color:#4c5e73}
 
 .rec-row,.rec-actions { display:flex; align-items:center; flex-wrap:wrap; gap:7px 12px; }
 .rec-toolbar { margin-bottom:8px; }
+.rec-imports { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.rec-segmented { flex-wrap:wrap; max-width:100%; }
 .rec-filter { padding:8px 12px; border-bottom:1px solid var(--border); }
 .rec-actions { gap:6px; margin-left:auto; }
 .rec-row select { max-width:min(260px, 72vw); }

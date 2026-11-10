@@ -6,14 +6,22 @@ const grainNames = {month:'月', week:'周', day:'日'};
 const targetLevels = {summary:'汇总车型', model:'单代际', generation:'单代际', version:'版本'};
 const stockFields = ['opening_stock', 'inbound_actual', 'outbound_actual', 'adjustments', 'closing_stock'];
 const preferredMetrics = ['sop_plan', 'locked_orders', 'supply_plan', 'inbound_actual', 'sales_actual', 'sales_plan', 'transit', 'inbound_forecast', 'opening_stock', 'outbound_actual', 'adjustments', 'closing_stock'];
+const importEntries = [['shared', '共享 Excel'], ['excel', '本地 Excel'], ['text', '粘贴消息'], ['image', '导入截图']];
+const resultViews = {
+  all: {label:'全部结果'},
+  locks: {label:'计划与锁单', metrics:['sop_plan', 'locked_orders']},
+  supply: {label:'计划与供应', metrics:['sop_plan', 'supply_plan']},
+  stock: {label:'库存平衡', metrics:stockFields},
+  issues: {label:'异常核对'},
+};
 const path = id => ROOT + '/' + encodeURIComponent(id);
 
 export function createReconcilePage({
   host, api, serviceFetch, openDialog, closeDialog, toast, esc, fmt, dateText,
   isActive, getOwner, canWrite, rememberOwner,
 }) {
-  let rounds = [], snapshots = [], currentMonth = '', detail = null, selectedRound = '';
-  let view = 'sources', status = 'pending', resultFilter = 'all', sourceFilter = '', resultTarget = '';
+  let rounds = [], snapshots = [], currentMonth = '', metrics = {}, detail = null, selectedRound = '';
+  let view = 'results', status = 'pending', resultFilter = 'all', sourceFilter = '', resultTarget = '';
   let request = 0, pageNumber = 0, selectedRecords = new Set();
 
   const option = (value, label, chosen) =>
@@ -138,13 +146,18 @@ export function createReconcilePage({
   }
 
   function groupsTable() {
-    const groups = (detail.result?.groups || []).filter(group => !resultTarget || group.target_id === resultTarget);
-    const byTarget = new Map(detail.targets.map(target => [target.id, target.label]));
-    const metricKeys = [...new Set([...preferredMetrics, ...Object.keys(detail.metrics)])].filter(key =>
-      key in detail.metrics && (['sop_plan', 'locked_orders', 'supply_plan'].includes(key) ||
-        groups.some(group => group.values?.[key] != null || group.baseline_values?.[key] != null)));
-    const showStock = groups.some(group => group.balance?.difference != null ||
-      stockFields.some(key => group.values?.[key] != null));
+    const scope = resultViews[resultFilter].metrics;
+    const hasMetric = (group, key) => group.record_ids?.[key]?.length ||
+      group.values?.[key] != null || group.baseline_values?.[key] != null;
+    const groups = (detail?.result?.groups || []).filter(group =>
+      (!resultTarget || group.target_id === resultTarget) && (!scope || scope.some(key => hasMetric(group, key))));
+    const byTarget = new Map((detail?.targets || []).map(target => [target.id, target.label]));
+    const labels = detail?.metrics || metrics;
+    const metricKeys = scope || [...new Set([...preferredMetrics, ...Object.keys(labels)])].filter(key => key in labels &&
+      (['sop_plan', 'locked_orders', 'supply_plan'].includes(key) || groups.some(group => hasMetric(group, key))));
+    const showGap = resultFilter === 'all' || resultFilter === 'supply';
+    const showStock = resultFilter === 'stock' || (resultFilter === 'all' &&
+      groups.some(group => stockFields.some(key => hasMetric(group, key))));
     const rows = visiblePage(groups).map(group => '<tr>' +
       cell(byTarget.get(group.target_id) || group.model) +
       cell(group.period + (group.granularity === 'month' ? '' : ' · ' + (grainNames[group.granularity] || ''))) +
@@ -155,16 +168,17 @@ export function createReconcilePage({
         const note = partial ? '基准部分覆盖' : value == null && baseline != null ? '基准 ' + fmt(baseline) : '';
         return '<td class="rec-number">' + esc(fmt(value)) + (note ? '<small>' + esc(note) + '</small>' : '') + '</td>';
       }).join('') +
-      '<td class="rec-number' + (group.supply_gap > 0 ? ' rec-shortfall' : '') + '">' +
-      esc(fmt(group.supply_gap)) + '</td>' + (showStock ? numericCell(group.balance?.difference) : '') + '</tr>');
-    return table(['车型', '期间', '库区', ...metricKeys.map(key => detail.metrics[key]), '供应缺口',
-      ...(showStock ? ['库存差额'] : [])], rows, '暂无可对账数据') + pager(groups.length);
+      (showGap ? '<td class="rec-number' + (group.supply_gap > 0 ? ' rec-shortfall' : '') + '">' +
+      esc(fmt(group.supply_gap)) + '</td>' : '') +
+      (showStock ? numericCell(group.balance?.expected_closing) + numericCell(group.balance?.difference) : '') + '</tr>');
+    return table(['车型', '期间', '库区', ...metricKeys.map(key => labels[key]), ...(showGap ? ['供应缺口'] : []),
+      ...(showStock ? ['计算期末库存', '库存差额'] : [])], rows, detail ? '暂无可对账数据' : '暂无对账批次') + pager(groups.length);
   }
 
   function issuesTable() {
-    const byKey = new Map((detail.result?.groups || []).map(group => [group.key, group]));
-    const records = new Map([...detail.records, ...(detail.baseline_records || [])].map(record => [record.id, record]));
-    const issues = (detail.result?.issues || []).filter(issue => !resultTarget ||
+    const byKey = new Map((detail?.result?.groups || []).map(group => [group.key, group]));
+    const records = new Map([...(detail?.records || []), ...(detail?.baseline_records || [])].map(record => [record.id, record]));
+    const issues = (detail?.result?.issues || []).filter(issue => !resultTarget ||
       byKey.get(issue.group_key)?.target_id === resultTarget ||
       (issue.record_ids || []).some(id => records.get(id)?.target_id === resultTarget));
     const rows = visiblePage(issues).map(issue => {
@@ -174,20 +188,20 @@ export function createReconcilePage({
         '<td class="rec-wrap">' + esc(issue.detail) + '</td><td>' +
         (hasRecords ? action('issue', '查看关联记录', {id:issue.id}) : '') + '</td></tr>';
     });
-    return table(['异常', '车型 / 期间', '差异', '操作'], rows, '暂无异常') + pager(issues.length);
+    return table(['异常', '车型 / 期间', '差异', '操作'], rows, detail ? '暂无异常' : '暂无对账批次') + pager(issues.length);
   }
 
   function resultsTable() {
-    const targetIds = new Set((detail.result?.groups || []).map(group => group.target_id));
-    const targets = detail.targets.filter(target => targetIds.has(target.id));
-    const toggles = '<div class="rec-row rec-filter"><div class="segmented" role="group" aria-label="结果范围">' +
-      ['all', 'issues'].map(key => '<button type="button" data-rec="result-filter" data-id="' + key +
+    const targetIds = new Set((detail?.result?.groups || []).map(group => group.target_id));
+    const targets = (detail?.targets || []).filter(target => targetIds.has(target.id));
+    const toggles = '<div class="rec-row rec-filter"><div class="segmented rec-segmented" role="group" aria-label="对账项目">' +
+      Object.entries(resultViews).map(([key, item]) => '<button type="button" data-rec="result-filter" data-id="' + key +
         '" aria-pressed="' + (resultFilter === key) + '">' +
-        (key === 'all' ? '全部结果' : '异常 ' + (detail.result?.issues?.length || 0)) + '</button>').join('') +
-      '</div><label class="field inline-field">车型<select data-rec-change="result-target">' +
+        item.label + (key === 'issues' && detail ? ' ' + (detail.result?.issues?.length || 0) : '') + '</button>').join('') +
+      '</div>' + (detail ? '<label class="field inline-field">车型<select data-rec-change="result-target">' +
       option('', '全部车型及版本', resultTarget) +
       targets.map(target => option(target.id, target.label, resultTarget)).join('') +
-      '</select></label></div>';
+      '</select></label>' : '') + '</div>';
     return toggles + (resultFilter === 'issues' ? issuesTable() : groupsTable());
   }
 
@@ -199,24 +213,24 @@ export function createReconcilePage({
         : option('', '暂无批次', '')) + '</select></label>';
     const primary = '<div class="rec-row rec-toolbar">' + picker +
       (detail ? '<span class="rec-period">' + esc(detail.start_month + ' 至 ' + detail.end_month) + '</span>' : '') +
-      '<div class="rec-actions">' + action('new', '新建对账', {primary:!detail, write:true}) +
-      (detail ? action('baseline', '更新基准', {write:true}) + action('import', '添加资料', {primary:true, write:true}) : '') +
+      '<div class="rec-actions">' + action('new', '新建对账', {write:true}) +
+      (detail ? action('baseline', '更新基准', {write:true}) : '') +
+      '</div><div class="rec-imports" role="group" aria-label="导入资料">' +
+      importEntries.map(([id, label]) => action('import', label, {id, primary:id === 'shared', write:true})).join('') +
       '</div></div>';
-    if (!detail) {
-      host.innerHTML = primary + '<section class="card empty-state compact">暂无对账批次</section>';
-      return;
-    }
-    const pending = detail.records.filter(record => record.status === 'pending').length;
+    const pending = detail?.records.filter(record => record.status === 'pending').length || 0;
+    const activeView = detail ? view : 'results';
     const labels = {sources:'资料', records:'待确认' + (pending ? ' ' + pending : ''), results:'对账结果'};
     const tabs = '<div class="segmented" role="group" aria-label="对账视图">' + Object.entries(labels)
       .map(([key, label]) => '<button type="button" data-rec="view" data-id="' + key +
-        '" aria-pressed="' + (view === key) + '">' + esc(label) + '</button>').join('') + '</div>';
-    const snapshot = snapshots.find(item => String(item.id) === String(detail.snapshot_id));
-    const caption = '<span class="rec-count">' + esc(snapshot ? '快照 ' + snapshot.label : 'SOP 基准') +
-      ' · ' + esc(date(detail.baseline_at)) + '</span>';
-    const exports = view === 'results' ? '<div class="rec-actions">' + action('export', '导出 Excel') +
+        '" aria-pressed="' + (activeView === key) + '"' + (!detail && key !== 'results' ? ' disabled' : '') +
+        '>' + esc(label) + '</button>').join('') + '</div>';
+    const snapshot = snapshots.find(item => String(item.id) === String(detail?.snapshot_id));
+    const caption = detail ? '<span class="rec-count">' + esc(snapshot ? '快照 ' + snapshot.label : 'SOP 基准') +
+      ' · ' + esc(date(detail.baseline_at)) + '</span>' : '';
+    const exports = detail && activeView === 'results' ? '<div class="rec-actions">' + action('export', '导出 Excel') +
       action('summary', '导出摘要') + '</div>' : '';
-    const content = view === 'sources' ? sourcesTable() : view === 'records' ? recordsTable() : resultsTable();
+    const content = activeView === 'sources' ? sourcesTable() : activeView === 'records' ? recordsTable() : resultsTable();
     host.innerHTML = primary + '<section class="card rec-card"><div class="rec-row rec-filter">' + tabs + caption +
       exports + '</div>' + content + '</section>';
   }
@@ -230,6 +244,7 @@ export function createReconcilePage({
       rounds = index.rounds || [];
       snapshots = index.snapshots || [];
       currentMonth = index.current_month;
+      metrics = index.metrics || {};
       selectedRound = rounds.find(round => String(round.id) === String(selectedRound))?.id ?? rounds[0]?.id ?? '';
       const next = selectedRound ? await api(path(selectedRound)) : null;
       if (ticket !== request || !isActive()) return;
@@ -253,7 +268,7 @@ export function createReconcilePage({
       '</select></label>';
   }
 
-  function formDialog(title, fields, submitLabel, save, {editable=true}={}) {
+  function formDialog(title, fields, submitLabel, save, {editable=true, afterSave}={}) {
     openDialog('<h2>' + esc(title) + '</h2><form id="rec-form"><div class="rec-dialog-grid">' + fields +
       '</div><p class="field-error" role="alert"></p><div class="dialog-actions">' +
       '<button type="button" data-close class="button">' + (editable ? '取消' : '关闭') + '</button>' +
@@ -271,30 +286,39 @@ export function createReconcilePage({
       try {
         await save(values);
         rememberOwner(values.owner?.trim());
-        closeDialog();
       } catch (error) {
         errorField.textContent = error.message;
         submit.disabled = false;
+        return;
       }
+      const dialog = form.closest('dialog');
+      const closed = afterSave && dialog?.open
+        ? new Promise(resolve => dialog.addEventListener('close', resolve, {once:true})) : null;
+      closeDialog();
+      try {
+        if (closed) await closed;
+        await afterSave?.();
+      }
+      catch (error) { toast(error.message, true); }
     });
   }
 
-  function newRound() {
+  function newRound(importKind) {
     const monthField = (name, label) => '<label class="field">' + label +
       '<input name="' + name + '" type="month" required value="' + esc(currentMonth) + '"></label>';
     formDialog('新建对账', '<label class="field">批次名称<input name="name" maxlength="100" required value="' +
       esc(currentMonth ? currentMonth + ' 对账' : '') + '"></label>' + snapshotPicker('') +
-      monthField('start_month', '开始月份') + monthField('end_month', '结束月份') + ownerInput(), '创建',
+      monthField('start_month', '开始月份') + monthField('end_month', '结束月份') + ownerInput(), importKind ? '创建并继续' : '创建',
     async values => {
       const created = await api(ROOT, values);
       selectedRound = created.id;
-      view = 'sources';
+      view = 'results';
       sourceFilter = '';
       resultTarget = '';
       clearSelection();
       await load();
       toast('对账批次已创建');
-    });
+    }, {afterSave: importKind ? () => detail?.id === selectedRound && addSource(importKind) : undefined});
   }
 
   function changeBaseline() {
@@ -394,12 +418,14 @@ export function createReconcilePage({
     }
   }
 
-  async function addSource() {
+  async function addSource(initialKind) {
+    if (!canWrite()) return;
+    if (!detail) return newRound(initialKind);
     const current = detail;
-    const {openImportDialog} = await import('./reconcile_ingest/dialog.mjs');
+    const {openImportDialog} = await import('./reconcile_ingest/dialog.mjs?v=2');
     if (!isActive() || detail !== current) return;
     await openImportDialog({
-      openDialog, closeDialog, api, serviceFetch, detail:current, owner:getOwner(), esc, toast,
+      openDialog, closeDialog, api, serviceFetch, detail:current, owner:getOwner(), esc, toast, initialKind,
       onImported(updated, operator) {
         detail = updated;
         rememberOwner(operator);
@@ -420,7 +446,7 @@ export function createReconcilePage({
       if (rec === 'retry') await load();
       else if (rec === 'new') newRound();
       else if (rec === 'baseline') changeBaseline();
-      else if (rec === 'import') await addSource();
+      else if (rec === 'import') await addSource(id);
       else if (rec === 'source') await sourceDialog(id);
       else if (rec === 'record') recordDialog(detail.records.find(record => record.id === id));
       else if (rec === 'issue') issueDialog(id);
