@@ -305,7 +305,7 @@ function allMetricHits(text) {
   return hits.filter((hit, index, all) => !all.slice(0, index).some(previous => hit.index >= previous.index && hit.index < previous.index + previous.text.length));
 }
 
-const explicitAmountPattern = /(?<![\d.,，+\-−－])[+-]?(?:\d{1,3}(?:[,，]\d{3})+|\d+)(?:\.\d+)?\s*(?:万\s*)?(?:辆|台车|台|单)(?![A-Za-z])/g;
+const explicitAmountPattern = /(?<![\d.+\-−－])(?<!\d[,，])[+-]?(?:\d{1,3}(?:[,，]\d{3})+|\d+)(?:\.\d+)?\s*(?:万\s*)?(?:辆|台车|台|单)(?![A-Za-z])/g;
 
 function defaultAmount(segment, metric) {
   if (!Object.hasOwn(LABELS, metric) || /约|大概|左右|上下|可能|暂估|待确认|至少|至多|不少于|不超过|以上|以下|以内|[<>≤≥]/.test(segment)) return null;
@@ -328,8 +328,10 @@ export function extractText(text, context = {}) {
     const lineModels = namedModels(line), linePeriod = periodFrom(line, context);
     const dateTokens = line.match(/\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}(?:日|号)?)?|\d{1,2}月\d{1,2}日|本周|下周|上周|本月|下月|上月|今天|明天|昨天/g) || [];
     const linePeriodSafe = unique(dateTokens).length <= 1;
-    const lineHasOneAmount = Object.hasOwn(LABELS, context.metric) && [...line.matchAll(explicitAmountPattern)].length === 1;
     const segments = line.split(/[；;。]|(?<!\d)[，,]|[，,](?!\d{3}(?:\D|$))/).map(clean).filter(Boolean);
+    const lineHasOneAmount = Object.hasOwn(LABELS, context.metric) &&
+      segments.reduce((count, segment) => count + [...segment.matchAll(explicitAmountPattern)].length, 0) === 1;
+    const lineHasMetric = segments.length > 1 && allMetricHits(line).length > 0;
     for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
       const segment = segments[segmentIndex], localModels = namedModels(segment);
       const model = localModels.length === 1 ? localModels[0] : localModels.length ? '' : lineModels.length === 1 ? lineModels[0] : clean(context.model);
@@ -346,6 +348,8 @@ export function extractText(text, context = {}) {
       if (!linePeriodSafe && !localPeriod.period) baseWarnings.push('原行包含多个日期，此片段周期未自动继承');
       if (hits.length === 0) {
         const amount = model && lineHasOneAmount && (linePeriodSafe || localPeriod.period) ? defaultAmount(segment, context.metric) : null;
+        const label = segment.match(/^车型\s*[:：]\s*(.*)$/)?.[1].replace(/\s+/g, ' ');
+        if (!amount && localModels.length === 1 && label === localModels[0] && (lineHasMetric || lineHasOneAmount)) continue;
         records.push(candidate(context, {
           sourceRef: `第 ${lineIndex + 1} 行 · 片段 ${segmentIndex + 1}`, model, variant, location, batch, scope,
           period: resolvedPeriod.period, granularity: resolvedPeriod.granularity, metric: amount ? context.metric : '',
