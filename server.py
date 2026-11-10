@@ -86,7 +86,31 @@ def open_workbench(url):
     print(f"未能自动打开浏览器，请手动访问：{url}", flush=True)
 
 
-def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None, plan_export=None, source_refresh=None, plan_roundtrip=None, gateway=None):
+def windows_console_user():
+    """Read the Windows account that launched this loopback-only service."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    get_user_name = ctypes.windll.secur32.GetUserNameExW
+    get_user_name.argtypes = (ctypes.c_int, wintypes.LPWSTR, ctypes.POINTER(wintypes.ULONG))
+    get_user_name.restype = ctypes.c_ubyte
+    buffer = ctypes.create_unicode_buffer(256)
+    length = wintypes.ULONG(len(buffer))
+    if get_user_name(2, buffer, ctypes.byref(length)):  # NameSamCompatible: DOMAIN\account
+        user = buffer.value
+    else:
+        try:
+            user = os.getlogin()
+        except OSError:
+            return None
+    user = user.strip()
+    return user if 0 < len(user) <= 100 and all(ord(char) >= 32 and ord(char) != 127 for char in user) else None
+
+
+def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None, plan_export=None,
+                 source_refresh=None, plan_roundtrip=None, gateway=None, *, console_user=None):
     plan_export = plan_export or PlanExport(root=ROOT)
     roundtrip_lock = threading.Lock()
     reconcile_service_instance = None
@@ -316,7 +340,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
             try:
                 if path == "/api/session":
                     self._json({"mode": "gateway" if gateway else "console",
-                                "user": self.gateway_user if gateway else None,
+                                "user": self.gateway_user if gateway else console_user,
                                 "canWrite": gateway.allow_writes if gateway else True})
                 elif path == "/api/health":
                     health = {"app_id": "hima-sop", "launch_mode": "gateway" if gateway else getattr(self.server, "launch_mode", None)}
@@ -440,10 +464,11 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     from sop.reconcile import MAX_IMPORT_BYTES
                     limit = MAX_IMPORT_BYTES
                 body = self._body(limit)
-                if gateway:
-                    body = attributed_body(body, self.gateway_user)
+                actor = self.gateway_user if gateway else console_user
+                if actor:
+                    body = attributed_body(body, actor)
                     if is_reconcile or path in {"/api/plans", "/api/plans/batch-edit", "/api/products", "/api/shipments"}:
-                        body["owner"] = self.gateway_user
+                        body["owner"] = actor
                 if is_reconcile:
                     self._reconcile_post(path, body)
                     return
@@ -487,7 +512,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     if not decoded or len(decoded) > 12 * 1024 * 1024:
                         raise ValidationError("Excel 文件为空或超过 12 MB。")
                     result = roundtrip_service().import_content(decoded, choice=body.get("choice"),
-                        **({"actor": self.gateway_user} if gateway else {}))
+                        **({"actor": actor} if actor else {}))
                     if not result.get("ok", False):
                         self._json(result, 409 if result.get("status") == "conflict" else 400)
                         return
@@ -675,7 +700,8 @@ def main():
             workers.append(worker)
         server.launch_mode = "gateway" if gateway else "console"
         server.RequestHandlerClass = make_handler(store, args.web_dir, args.port, workbook_sync,
-                                                  snapshot_backup, source_refresh=source_refresh, gateway=gateway)
+                                                  snapshot_backup, source_refresh=source_refresh, gateway=gateway,
+                                                  console_user=None if gateway else windows_console_user())
         print(f"\nSOP计划管理已就绪：{url}\n保持此窗口打开；关闭窗口或按 Ctrl+C 即停止。\n关闭浏览器页面不会停止工作台。\n", flush=True)
         if args.open_browser:
             threading.Thread(target=open_workbench, args=(url,), name="open-browser", daemon=True).start()

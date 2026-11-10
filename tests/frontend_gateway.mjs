@@ -102,4 +102,12 @@ assert.equal(f.run('serviceBase'),'');assert.equal(f.run('access.canWrite'),true
 assert.equal(f.run('owner'),'client-provided-owner');
 assert.equal(f.nodes.get('#access-status').hidden,true);
 
+f=fixture('/');f.respond('/api/session',200,{mode:'console',user:'DESKTOP\\李晓',canWrite:true});
+await f.run('initializeAccess()');
+assert.equal(f.run('owner'),'DESKTOP\\李晓');
+assert.equal(f.nodes.get('#owner-btn').textContent,'DESKTOP\\李晓');
+assert.equal(f.nodes.get('#grid-owner').readOnly,true);
+assert.equal(f.nodes.get('#grid-owner').value,'DESKTOP\\李晓');
+assert.deepEqual(f.requests.map(request=>request.path),['/api/session']);
+
 console.log('PASS: scoped API/Excel transport, gateway session checks, IIS write probe, fail-closed paused service UI, trusted owner display, permission revocation and legacy console.');

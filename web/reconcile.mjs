@@ -18,7 +18,7 @@ const path = id => ROOT + '/' + encodeURIComponent(id);
 
 export function createReconcilePage({
   host, api, serviceFetch, openDialog, closeDialog, toast, esc, fmt, dateText,
-  isActive, getOwner, canWrite, rememberOwner,
+  isActive, getOwner, canWrite, rememberOwner, isOwnerLocked = () => false,
 }) {
   let rounds = [], snapshots = [], currentMonth = '', metrics = {}, detail = null, selectedRound = '';
   let view = 'results', status = 'pending', resultFilter = 'all', sourceFilter = '', resultTarget = '';
@@ -457,10 +457,10 @@ export function createReconcilePage({
     if (!canWrite()) return;
     if (!detail) return newRound(initialKind);
     const current = detail;
-    const {openImportDialog} = await import('./reconcile_ingest/dialog.mjs?v=3');
+    const {openImportDialog} = await import('./reconcile_ingest/dialog.mjs?v=4');
     if (!isActive() || detail !== current) return;
     await openImportDialog({
-      openDialog, closeDialog, api, serviceFetch, detail:current, owner:getOwner(), esc, toast, initialKind,
+      openDialog, closeDialog, api, serviceFetch, detail:current, owner:getOwner(), ownerReadOnly:isOwnerLocked(), esc, toast, initialKind,
       onImported(updated, operator) {
         detail = updated;
         rememberOwner(operator);

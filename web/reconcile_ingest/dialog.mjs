@@ -63,7 +63,8 @@ function verifyImage(file) {
   throw new Error('请选择 PNG、JPG 或 WebP 截图。');
 }
 
-export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, detail, owner, onImported, esc, toast, initialKind = 'excel' }) {
+export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, detail, owner, ownerReadOnly = false,
+  onImported, esc, toast, initialKind = 'excel' }) {
   const metrics = detail.metrics || {};
   const sharedPath = '/api/reconcile/shared';
   const roundPath = '/api/reconcile/' + encodeURIComponent(detail.id);
@@ -159,7 +160,7 @@ export function openImportDialog({ openDialog, closeDialog, api, serviceFetch, d
       <hr class="divider"><form novalidate>
       <div class="form-grid"><fieldset class="form-grid full" ${draft.busy ? 'disabled' : ''} style="border:0;padding:0;margin:0;min-width:0">
       <legend class="visually-hidden">资料内容</legend>${sourceFields()}${draft.kind === 'backup' ? '' : importFields()}
-      ${input('reconcile-import-owner', '操作人', draft.owner, 'text', 'id="reconcile-import-owner" maxlength="100" required')}
+      ${input('reconcile-import-owner', '操作人', draft.owner, 'text', 'id="reconcile-import-owner" maxlength="100" required' + (ownerReadOnly ? ' readonly' : ''))}
       </fieldset></div>
       ${draft.error ? `<p class="field-error" role="alert">${esc(draft.error)}</p>` : ''}
       <p data-import-progress class="muted" role="status" ${draft.progress ? '' : 'hidden'}>${esc(draft.progress)}</p>

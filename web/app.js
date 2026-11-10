@@ -9,6 +9,7 @@ const serviceBase = (() => {
   return directory === '/' ? '' : directory.replace(/\/$/, '');
 })();
 const access = {gateway:!!serviceBase,canWrite:!serviceBase,user:'',message:serviceBase?'正在连接业务服务…':''};
+const hasTrustedOperator = () => access.gateway || !!access.user;
 const writeActions = new Set(['grid-save','grid-add','manage-products','new-product','rename-model','open-workbook','sync-workbook','resolve-db','resolve-workbook','edit-first','bulk-plan','export-plan','import-plan','detail-edit','edit-shipments','save-settings','refresh-sales','create-snapshot']);
 const readOnlyMessage = '当前服务暂停写入或连接校验未通过，请稍后重试或联系维护人员。部门成员使用相同的业务功能。';
 function serviceUrl(path) {
@@ -45,11 +46,11 @@ function applyAccessControls() {
     banner.classList.toggle('read-only', !access.canWrite);
   }
   const ownerButton = $('#owner-btn');
-  if (ownerButton && access.gateway) {
+  if (ownerButton && hasTrustedOperator()) {
     ownerButton.textContent = access.user || '企业用户';
     ownerButton.disabled = true;
     ownerButton.setAttribute('aria-label', '当前登录用户');
-    ownerButton.title = '操作人由企业登录身份确定';
+    ownerButton.title = '操作人取自 Windows 登录账户';
   }
   $$('[data-action],[data-edit],[data-catalog-edit],[data-catalog-bind],#generation-filter,#bridge-toggle,#edit-dialog button[type="submit"]').forEach(control => {
     const mutating = writeActions.has(control.dataset?.action) || control.hasAttribute?.('data-edit') || control.hasAttribute?.('data-catalog-edit') || control.hasAttribute?.('data-catalog-bind') || ['generation-filter','bridge-toggle'].includes(control.id) || control.type === 'submit';
@@ -62,7 +63,7 @@ function applyAccessControls() {
       control.disabled = false; delete control.dataset.accessDisabled;
     }
   });
-  if (access.gateway) $$('input[id$="-owner"]').forEach(control => {control.value = access.user;control.readOnly = true;control.setAttribute('aria-readonly','true');});
+  if (hasTrustedOperator()) $$('input[id$="-owner"]').forEach(control => {control.value = access.user;control.readOnly = true;control.setAttribute('aria-readonly','true');});
 }
 async function initializeAccess() {
   try {
@@ -72,11 +73,11 @@ async function initializeAccess() {
     const session = await response.json();
     if (!session || !['gateway','console'].includes(session.mode) || (serviceBase && session.mode !== 'gateway') || typeof session.canWrite !== 'boolean') throw new Error('登录信息暂不可用');
     access.gateway = session.mode === 'gateway';
-    access.user = typeof session.user === 'string' ? session.user : '';
+    access.user = typeof session.user === 'string' ? session.user.trim() : '';
+    if (access.user) owner = access.user;
     access.canWrite = !access.gateway && session.canWrite;
     if (access.gateway) {
       if (!access.user.trim()) throw new Error('登录信息暂不可用');
-      owner = access.user;
       if (session.canWrite) {
         const check = await serviceFetch('/api/write-access', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal}, true);
         if (check.ok) {const permitted = await check.json();access.canWrite = permitted.canWrite === true || permitted.ok === true;}
@@ -1367,12 +1368,13 @@ async function optionPage() {
 let reconcilePage;
 async function renderReconcilePage() {
   if (!reconcilePage) {
-    const {createReconcilePage} = await import('./reconcile.mjs?v=3');
+    const {createReconcilePage} = await import('./reconcile.mjs?v=4');
     reconcilePage ||= createReconcilePage({
       host: $('#app'), api, serviceFetch, openDialog, closeDialog, toast, esc, fmt, dateText,
       isActive: () => page === 'reconcile', getOwner: () => access.user || owner, canWrite: () => access.canWrite,
+      isOwnerLocked: hasTrustedOperator,
       rememberOwner: value => {
-        if (access.gateway || !value) return;
+        if (hasTrustedOperator() || !value) return;
         owner = value;
         $('#owner-btn').textContent = owner;
         try { localStorage.setItem('sop-owner', owner); } catch { /* Keep the current operator in memory. */ }
@@ -1588,11 +1590,11 @@ document.addEventListener('change',async e=>{
 if(typeof MutationObserver!=='undefined'){const accessObserver=new MutationObserver(()=>applyAccessControls());for(const selector of ['#app','#dialog-content']){const region=$(selector);if(region)accessObserver.observe(region,{childList:true,subtree:true});}}
 let searchTimer;
 document.addEventListener('input',e=>{
-  if(gridDraft){if(gridLocked())return;if(e.target.dataset.gridGroup){gridChangeModel(e.target.dataset.gridGroup,e.target.dataset.gridGroupField,e.target.value);return;}const row=gridRow(e.target.dataset.gridId);if(row){if(e.target.dataset.gridMonth)row.values[e.target.dataset.gridMonth]=e.target.value;else if(e.target.dataset.gridField)row[e.target.dataset.gridField]=e.target.value;e.target.removeAttribute('aria-invalid');e.target.classList.add('changed');gridDraft.request=null;return;}if(e.target.id==='grid-owner'){if(!access.gateway)gridDraft.owner=e.target.value;return;}if(e.target.id==='grid-reason'){gridDraft.reason=e.target.value;return;}return;}
+  if(gridDraft){if(gridLocked())return;if(e.target.dataset.gridGroup){gridChangeModel(e.target.dataset.gridGroup,e.target.dataset.gridGroupField,e.target.value);return;}const row=gridRow(e.target.dataset.gridId);if(row){if(e.target.dataset.gridMonth)row.values[e.target.dataset.gridMonth]=e.target.value;else if(e.target.dataset.gridField)row[e.target.dataset.gridField]=e.target.value;e.target.removeAttribute('aria-invalid');e.target.classList.add('changed');gridDraft.request=null;return;}if(e.target.id==='grid-owner'){if(!hasTrustedOperator())gridDraft.owner=e.target.value;return;}if(e.target.id==='grid-reason'){gridDraft.reason=e.target.value;return;}return;}
   if(e.target.id==='table-view-name'){viewNameDraft=e.target.value;return;}
   if(e.target.id==='version-search'){clearTimeout(searchTimer);query=e.target.value;searchTimer=setTimeout(async()=>{const pos=e.target.selectionStart;await renderPage();const inp=$('#version-search');if(inp){inp.focus();inp.setSelectionRange(pos,pos)}},300);}});
 $('#owner-btn')?.addEventListener('click',()=>{
-  if(access.gateway)return;
+  if(hasTrustedOperator())return;
   if(gridDraft)return toast('请在表内维护条填写维护人',true);
   openDialog(`<form id="owner-form"><h2>设置维护人</h2><label class="field">姓名<input id="owner-name" value="${esc(owner)}" required maxlength="60"></label><div class="dialog-actions">${button('取消','close-dialog')}<button class="button primary" type="submit">保存</button></div></form>`);
   $('#owner-form').onsubmit=e=>{e.preventDefault();owner=$('#owner-name').value.trim();localStorage.setItem('sop-owner',owner);$('#owner-btn').textContent=owner;closeDialog();};

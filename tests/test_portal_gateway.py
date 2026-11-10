@@ -50,7 +50,7 @@ class RoundtripStub:
 
 
 @contextmanager
-def running(*, writes=False, gateway_mode=True):
+def running(*, writes=False, gateway_mode=True, console_user=None):
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         (root / "index.html").write_text("<h1>isolated SOP</h1>", encoding="utf-8")
@@ -58,7 +58,7 @@ def running(*, writes=False, gateway_mode=True):
         server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
         cfg = GatewayConfig("/sop", ORIGIN, KEY, writes) if gateway_mode else None
         server.RequestHandlerClass = make_handler(store, root, server.server_port,
-            source_refresh=RefreshStub(), plan_roundtrip=roundtrip, gateway=cfg)
+            source_refresh=RefreshStub(), plan_roundtrip=roundtrip, gateway=cfg, console_user=console_user)
         thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=.01), daemon=True)
         thread.start()
         try:
@@ -259,6 +259,22 @@ class GatewayHTTPTest(unittest.TestCase):
             self.assertEqual(json.loads(body), {"mode": "console", "user": None, "canWrite": True})
             self.assertEqual(headers["X-Frame-Options"], "DENY")
             self.assertEqual(request(server, "/api/session", headers={"Origin": ORIGIN})[0], 403)
+
+    def test_windows_console_uses_the_same_account_for_display_and_writes(self):
+        local_user = "DESKTOP\\李晓"
+        with running(gateway_mode=False, console_user=local_user) as (server, store, roundtrip):
+            code, _, body = request(server, "/api/session")
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(body)["user"], local_user)
+            headers = {"Origin": f"http://127.0.0.1:{server.server_port}"}
+            code, _, _ = request(server, "/api/plans", method="POST", headers=headers,
+                                 body={"owner": "old-browser-owner", "changes": []})
+            self.assertEqual(code, 200)
+            self.assertEqual(store.saved[0]["owner"], local_user)
+            code, _, _ = request(server, "/api/plans/import-xlsx", method="POST", headers=headers,
+                                 body={"filename": "SOP计划.xlsx", "content_base64": "dGVzdA=="})
+            self.assertEqual(code, 200)
+            self.assertEqual(roundtrip.actors, [local_user])
 
 
 class GatewayConfigTest(unittest.TestCase):
