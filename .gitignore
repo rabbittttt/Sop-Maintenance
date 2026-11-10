@@ -10,9 +10,35 @@
 /.idea/
 **/__pycache__/
 *.py[cod]
+.pytest_cache/
 /scripts/node_modules/
 node_modules/
-~$*.xlsx
+
+# Local credentials and runtime logs.
+.env
+.env.*
+!.env.example
+*.secret
+*.pem
+*.key
+*.pfx
+*.p12
+*.log
+
+# Business copies outside the standard data directories.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite*-journal
+*.sqlite*-wal
+*.sqlite*-shm
+*.xlsx
+*.xlsm
+*.xls
+*.xlsb
 
 # Local update helper.
 update_script.bat
