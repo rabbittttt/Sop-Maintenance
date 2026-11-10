@@ -1368,7 +1368,7 @@ async function optionPage() {
 let reconcilePage;
 async function renderReconcilePage() {
   if (!reconcilePage) {
-    const {createReconcilePage} = await import('./reconcile.mjs?v=4');
+    const {createReconcilePage} = await import('./reconcile.mjs?v=5');
     reconcilePage ||= createReconcilePage({
       host: $('#app'), api, serviceFetch, openDialog, closeDialog, toast, esc, fmt, dateText,
       isActive: () => page === 'reconcile', getOwner: () => access.user || owner, canWrite: () => access.canWrite,

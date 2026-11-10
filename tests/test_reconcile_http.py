@@ -87,6 +87,25 @@ class ReconcileHTTPTest(unittest.TestCase):
             self.assertIn(outside["source_ref"], rejected["error"])
             self.assertTrue(all(record["status"] == "pending" for record in self.api(http, path)["records"]))
 
+    def test_import_preserves_raw_sources_and_defers_period_validation(self):
+        with self.running() as (http, _):
+            round_id = self.api(http, body={"name": "对账", "start_month": "2026-11", "end_month": "2026-11"})["id"]
+            path = "/" + round_id
+            source = {"name": "消息", "type": "text", "raw_text": "供货资料随后补发"}
+            archived = self.api(http, path + "/import", {"revision": 1, "source": source, "records": []})
+            self.assertEqual((archived["added_sources"], archived["added_records"]), (1, 0))
+            self.assertEqual(archived["sources"][0]["as_of"], "")
+            duplicate = self.api(http, path + "/import", {"revision": archived["revision"], "source": source, "records": []})
+            self.assertEqual((duplicate["added_sources"], duplicate["revision"]), (0, archived["revision"]))
+            detail = self.api(http, path + "/import", {"revision": archived["revision"],
+                "source": {**source, "raw_text": "R7 2027款，供应计划 120 辆"},
+                "records": [{**self.record("supply_plan", 120), "period": ""}]})
+            record = detail["records"][0]
+            self.assertEqual((record["period"], record["status"]), ("", "pending"))
+            self.assertTrue(any("期间" in error for error in record["confirmation_errors"]))
+            self.api(http, path + "/records", {"revision": detail["revision"],
+                "changes": [{"id": record["id"], "status": "confirmed"}]}, expected=400)
+
     def test_round_reuses_sop_shows_conflict_exports_and_persists(self):
         with self.running() as (http, store):
             def save_plan(quantity, revision):

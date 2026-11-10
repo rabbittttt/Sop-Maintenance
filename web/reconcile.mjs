@@ -16,6 +16,25 @@ const resultViews = {
 };
 const path = id => ROOT + '/' + encodeURIComponent(id);
 
+function importMonths(records, fallback) {
+  const months = [];
+  for (const record of records) {
+    const month = record.period.slice(0, 7);
+    if (!/^(?:19|20|21)\d{2}-(?:0[1-9]|1[0-2])$/.test(month)) continue;
+    months.push(month);
+    if (record.granularity === 'week' && /^\d{4}-\d{2}-\d{2}$/.test(record.period)) {
+      const end = new Date(record.period + 'T00:00:00Z');
+      if (Number.isNaN(end.getTime())) continue;
+      end.setUTCDate(end.getUTCDate() + 6);
+      if (end.getUTCFullYear() <= 2199) months.push(end.toISOString().slice(0, 7));
+    }
+  }
+  months.sort();
+  const start = months[0] || fallback, end = months.at(-1) || fallback;
+  const monthNumber = value => Number(value.slice(0, 4)) * 12 + Number(value.slice(5));
+  return monthNumber(end) - monthNumber(start) < 60 ? [start, end] : [fallback, fallback];
+}
+
 export function createReconcilePage({
   host, api, serviceFetch, openDialog, closeDialog, toast, esc, fmt, dateText,
   isActive, getOwner, canWrite, rememberOwner, isOwnerLocked = () => false,
@@ -319,12 +338,12 @@ export function createReconcilePage({
     });
   }
 
-  function newRound(importKind) {
+  function newRound() {
     const monthField = (name, label) => '<label class="field">' + label +
       '<input name="' + name + '" type="month" required value="' + esc(currentMonth) + '"></label>';
     formDialog('新建对账', '<label class="field">批次名称<input name="name" maxlength="100" required value="' +
       esc(currentMonth ? currentMonth + ' 对账' : '') + '"></label>' + snapshotPicker('') +
-      monthField('start_month', '开始月份') + monthField('end_month', '结束月份') + ownerInput(), importKind ? '创建并继续' : '创建',
+      monthField('start_month', '开始月份') + monthField('end_month', '结束月份') + ownerInput(), '创建',
     async values => {
       const created = await api(ROOT, values);
       selectedRound = created.id;
@@ -334,7 +353,7 @@ export function createReconcilePage({
       clearSelection();
       await load();
       toast('对账批次已创建');
-    }, {afterSave: importKind ? () => detail?.id === selectedRound && addSource(importKind) : undefined});
+    });
   }
 
   function changeBaseline() {
@@ -455,16 +474,31 @@ export function createReconcilePage({
 
   async function addSource(initialKind) {
     if (!canWrite()) return;
-    if (!detail) return newRound(initialKind);
     const current = detail;
-    const {openImportDialog} = await import('./reconcile_ingest/dialog.mjs?v=4');
+    const {openImportDialog} = await import('./reconcile_ingest/dialog.mjs?v=5');
     if (!isActive() || detail !== current) return;
     await openImportDialog({
-      openDialog, closeDialog, api, serviceFetch, detail:current, owner:getOwner(), ownerReadOnly:isOwnerLocked(), esc, toast, initialKind,
+      openDialog, closeDialog, api, serviceFetch, metrics:current?.metrics || metrics,
+      owner:getOwner(), ownerReadOnly:isOwnerLocked(), esc, toast, initialKind,
+      async getRound(records, owner) {
+        if (detail) return detail;
+        if (!selectedRound) {
+          const [start, end] = importMonths(records, currentMonth);
+          const created = await api(ROOT, {name:start + ' 对账', start_month:start, end_month:end, owner});
+          selectedRound = created.id;
+        }
+        await load();
+        if (!detail) throw new Error('读取对账批次失败，请重试。');
+        return detail;
+      },
       onImported(updated, operator) {
         detail = updated;
         rememberOwner(operator);
         if (!updated.added_records) {
+          if (updated.added_sources) {
+            view = 'sources';
+            clearSelection();
+          }
           render();
           return;
         }

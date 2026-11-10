@@ -333,9 +333,12 @@ class Reconciliation:
             if not isinstance(item, dict) or not isinstance(item.get("records"), list):
                 raise ValidationError("候选记录列表格式无效。")
             total += len(item["records"])
-            if total > MAX_RECORDS or (not restore and not total):
-                raise ValidationError("单次请导入 1 至 10,000 条候选记录。")
-            prepared.append((self._source_input(item.get("source")), item["records"]))
+            if total > MAX_RECORDS:
+                raise ValidationError("单次最多导入 10,000 条候选记录。")
+            source = self._source_input(item.get("source"))
+            if not restore and not item["records"] and not (source["content"] or source["raw_text"]):
+                raise ValidationError("请选择文件或粘贴消息原文。")
+            prepared.append((source, item["records"]))
         now = stamp(self.store.clock())
         with self._transaction():
             row = self._round(round_id, body)
@@ -369,7 +372,7 @@ class Reconciliation:
                 self.db.execute("UPDATE reconcile_rounds SET revision=? WHERE id=?", (revision, round_id))
                 self._audit(round_id, revision, "restore" if restore else "import",
                             {"sources": imported_ids, "records": record_ids}, now, owner)
-        return {**self.detail(round_id), "added_records": added}
+        return {**self.detail(round_id), "added_records": added, "added_sources": len(imported_ids)}
 
     @staticmethod
     def _period_in_scope(record, row):
