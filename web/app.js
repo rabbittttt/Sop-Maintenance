@@ -96,7 +96,7 @@ const conflictValue = c => v => c.kind==='catalog' ? esc(typeof v==='boolean'?(v
 const conflictField = c => c.kind==='catalog' ? ({brand:'品牌',model:'车型',version:'版本名称',active:'启用状态'})[c.field]||'目录' : c.month||'';
 const pct = v => v == null ? '—' : `${Number(v).toFixed(1)}%`;
 const brands = ['智界','享界','尊界','尚界','问界'];
-const titles = {planning:'SOP计划表', 'option-split':'选配拆分', history:'历史快照', matching:'计划匹配率', data:'数据与规则'};
+const titles = {planning:'SOP计划表', 'option-split':'选配拆分', reconcile:'资料对账', history:'历史快照', matching:'计划匹配率', data:'数据与规则'};
 const statusText = v => ({official:'正式成绩',incomplete:'数据未齐全',missing:'实绩待维护',pending:'待结算',in_progress:'考核月未结束',settled:'已结算',corrected:'已更正',future:'未到取数日',missing_snapshot:'历史快照缺失',missing_plan:'计划待维护',undefined_zero:'双零口径待确认',complete:'可计分'})[v] || v;
 let state, page = 'planning', brand = '', model = '', query = '', target = '', metric = '', range = 'rolling';
 let historyRange = 'recent';
@@ -1364,9 +1364,28 @@ async function optionPage() {
   }
   if(page==='option-split')optionPageRender();
 }
+let reconcilePage;
+async function renderReconcilePage() {
+  if (!reconcilePage) {
+    const {createReconcilePage} = await import('./reconcile.mjs?v=1');
+    reconcilePage ||= createReconcilePage({
+      host: $('#app'), api, serviceFetch, openDialog, closeDialog, toast, esc, fmt, dateText,
+      isActive: () => page === 'reconcile', getOwner: () => access.user || owner, canWrite: () => access.canWrite,
+      rememberOwner: value => {
+        if (access.gateway || !value) return;
+        owner = value;
+        $('#owner-btn').textContent = owner;
+        try { localStorage.setItem('sop-owner', owner); } catch { /* Keep the current operator in memory. */ }
+      },
+    });
+  }
+  if (page === 'reconcile') await reconcilePage.load();
+}
+
 async function renderPage() {
   $('#page-title').textContent=titles[page];
   $$('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===page);b.setAttribute('aria-current',b.dataset.page===page?'page':'false');});
+  if(page==='reconcile')return renderReconcilePage();
   if(generationViewError&&page!=='history')return showGenerationError(generationViewError);
   if(page==='planning')planning();else if(page==='option-split')await optionPage();else if(page==='history')await historyPage();else if(page==='matching')await matchingPage();else dataPage();
 }

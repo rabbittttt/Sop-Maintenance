@@ -947,3 +947,36 @@ input[aria-readonly="true"]{background:#f1f4f8;color:#4c5e73}
   .option-table .option-item-row .option-name { padding-left:15px; }
 }
 .committee-version-detail > summary { padding:10px 14px; cursor:pointer; }
+
+.rec-row,.rec-actions { display:flex; align-items:center; flex-wrap:wrap; gap:7px 12px; }
+.rec-toolbar { margin-bottom:8px; }
+.rec-filter { padding:8px 12px; border-bottom:1px solid var(--border); }
+.rec-actions { gap:6px; margin-left:auto; }
+.rec-row select { max-width:min(260px, 72vw); }
+.rec-count,.rec-period { color:var(--muted); font-size:12px; }
+.rec-table { width:100%; border-collapse:separate; border-spacing:0; font-size:12px; }
+.rec-table th,.rec-table td { padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
+.rec-table thead th { position:sticky; top:0; z-index:1; background:#eef3fa; color:#365270; }
+.rec-table td.rec-number { text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+.rec-table td.rec-shortfall { color:var(--red); }
+.rec-table td.empty-state { text-align:center; }
+.rec-table tr:last-child td { border-bottom:0; }
+.rec-table small { display:block; max-width:300px; overflow:hidden; text-overflow:ellipsis; color:var(--muted); }
+.rec-table button[data-rec="source"] { display:inline-block; max-width:min(260px, 75vw); overflow:hidden; text-overflow:ellipsis; }
+.rec-table .rec-wrap,.rec-wrap { white-space:normal; overflow-wrap:anywhere; }
+.rec-table .rec-wrap { min-width:210px; }
+.rec-card .table-scroll { max-height:min(68vh, 730px); }
+.rec-pager > div { display:flex; gap:6px; }
+.rec-dialog-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 12px; }
+.rec-dialog-grid .field,.rec-dialog-grid select { min-width:0; }
+.rec-full { grid-column:1 / -1; overflow-wrap:anywhere; }
+.rec-evidence { margin:8px 0; padding:9px 10px; max-height:230px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:var(--surface-soft); border:1px solid var(--border); border-radius:var(--control-radius); font:inherit; }
+.rec-warnings { color:var(--amber); font-size:12px; }
+.rec-issue-records { padding-left:22px; }
+.rec-issue-records li { margin:8px 0; overflow-wrap:anywhere; }
+#rec-form .field-error:empty { display:none; }
+@media(max-width:600px) {
+  .rec-toolbar .rec-actions { width:100%; margin-left:0; }
+  .rec-filter .rec-actions { margin-left:0; }
+  .rec-dialog-grid { grid-template-columns:minmax(0,1fr); }
+}

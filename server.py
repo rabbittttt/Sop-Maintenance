@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import gzip
 import importlib
 import json
 import logging
@@ -14,6 +15,7 @@ import socket
 import threading
 import time
 import webbrowser
+from functools import lru_cache
 from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +33,19 @@ from sop.option_mix import OptionMixError, read_option_mix
 
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("sop")
+OCR_LANG_PATH = "reconcile_ingest/vendor/tesseract/lang/"
+OCR_LANG_FILES = {"eng.traineddata", "chi_sim.traineddata"}
+
+
+@lru_cache(maxsize=4)
+def _ocr_language(web_root, name):
+    bundle = web_root / OCR_LANG_PATH / "languages.json"
+    if not bundle.is_file():
+        return None
+    package = json.loads(bundle.read_text(encoding="utf-8"))
+    if package.get("encoding") != "gzip+base64":
+        raise ValueError("Invalid packaged OCR language encoding")
+    return gzip.decompress(base64.b64decode(package["files"][name], validate=True))
 
 
 class WorkbenchHTTPServer(ThreadingHTTPServer):
@@ -74,6 +89,15 @@ def open_workbench(url):
 def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None, plan_export=None, source_refresh=None, plan_roundtrip=None, gateway=None):
     plan_export = plan_export or PlanExport(root=ROOT)
     roundtrip_lock = threading.Lock()
+    reconcile_service_instance = None
+
+    def reconcile_service():
+        nonlocal reconcile_service_instance
+        with store.lock:
+            if reconcile_service_instance is None:
+                from sop.reconcile import Reconciliation
+                reconcile_service_instance = Reconciliation(store, getattr(source_refresh, "root", ROOT))
+            return reconcile_service_instance
 
     def roundtrip_service():
         nonlocal plan_roundtrip
@@ -128,6 +152,65 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
             self._headers(status, "application/json; charset=utf-8", len(encoded))
             if self.command != "HEAD":
                 self.wfile.write(encoded)
+
+        def _reconcile_download(self, name, media_type, content):
+            self.send_response(200)
+            self.send_header("Content-Type", media_type)
+            self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(name, safe=""))
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(content)
+
+        def _reconcile_get(self, path):
+            service = reconcile_service()
+            parts = path.removeprefix("/api/reconcile").strip("/").split("/") if path != "/api/reconcile" else []
+            if not parts:
+                self._json(service.index())
+            elif parts == ["shared"]:
+                self._json(service.shared())
+            elif len(parts) == 2 and parts[0] == "shared":
+                self._reconcile_download(*service.read_shared(parts[1]))
+            elif len(parts) == 1:
+                self._json(service.detail(parts[0]))
+            elif len(parts) == 2 and parts[1] in {"export", "summary"}:
+                from sop.reconcile_export import summary_bytes, workbook_bytes
+                detail = service.detail(parts[0], include_baseline=True)
+                if parts[1] == "export":
+                    self._reconcile_download("SOP资料对账.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                             workbook_bytes(detail))
+                else:
+                    self._reconcile_download("SOP对账摘要.txt", "text/plain; charset=utf-8", summary_bytes(detail))
+            elif len(parts) in (3, 4) and parts[1] == "sources":
+                if len(parts) == 3:
+                    self._json(service.source(parts[0], parts[2]))
+                elif parts[3] == "download":
+                    self._reconcile_download(*service.source(parts[0], parts[2], download=True))
+                else:
+                    self._json({"error": "接口不存在。"}, 404)
+            else:
+                self._json({"error": "接口不存在。"}, 404)
+
+        def _reconcile_post(self, path, body):
+            service = reconcile_service()
+            if path == "/api/reconcile":
+                self._json(service.create(body))
+                return
+            parts = path.removeprefix("/api/reconcile/").split("/")
+            if len(parts) == 2:
+                round_id, action = parts
+                if action == "baseline":
+                    self._json(service.update_baseline(round_id, body))
+                    return
+                if action in {"import", "restore"}:
+                    self._json(service.import_sources(round_id, body, restore=action == "restore"))
+                    return
+                if action == "records":
+                    self._json(service.update_records(round_id, body))
+                    return
+            self._json({"error": "接口不存在。"}, 404)
 
         def _discard_rejected_body(self):
             """Keep a small rejected POST from resetting its own HTTP error.
@@ -248,6 +331,8 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     self._json(state)
                 elif path == "/api/option-mix":
                     self._json(read_option_mix(source_directory(getattr(source_refresh, "root", ROOT))))
+                elif path == "/api/reconcile" or path.startswith("/api/reconcile/"):
+                    self._reconcile_get(path)
                 elif path == "/api/products":
                     self._json(store.list_products())
                 elif path == "/api/plan-workbook/status" and workbook_sync:
@@ -317,12 +402,20 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     self._json({"error": "接口不存在。"}, 404)
                 else:
                     relative = "index.html" if path == "/" else path.lstrip("/")
+                    if relative.startswith(OCR_LANG_PATH) and relative.removeprefix(OCR_LANG_PATH) in OCR_LANG_FILES:
+                        language = _ocr_language(web_root, relative.removeprefix(OCR_LANG_PATH))
+                        if language is not None:
+                            self._headers(200, "application/octet-stream", len(language))
+                            if self.command != "HEAD":
+                                self.wfile.write(language)
+                            return
                     target = (web_root / relative).resolve()
                     if not target.is_relative_to(web_root.resolve()) or any(part.startswith(".") for part in Path(relative).parts) or not target.is_file():
                         self._json({"error": "页面不存在。"}, 404)
                         return
                     encoded = target.read_bytes()
-                    content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+                    content_type = ("text/javascript" if target.suffix.lower() == ".mjs" else
+                                    mimetypes.guess_type(target.name)[0] or "application/octet-stream")
                     if content_type.startswith("text/") or content_type in {"application/javascript", "application/json"}:
                         content_type += "; charset=utf-8"
                     self._headers(200, content_type, len(encoded))
@@ -342,12 +435,19 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     self._json({"error": "服务端不支持从浏览器打开服务器桌面文件，请下载副本。"}, 403)
                     return
                 limit = 17 * 1024 * 1024 if path == "/api/plans/import-xlsx" else MAX_REQUEST_BYTES
+                is_reconcile = path == "/api/reconcile" or path.startswith("/api/reconcile/")
+                if is_reconcile and path.rsplit("/", 1)[-1] in {"import", "restore"}:
+                    from sop.reconcile import MAX_IMPORT_BYTES
+                    limit = MAX_IMPORT_BYTES
                 body = self._body(limit)
                 if gateway:
                     body = attributed_body(body, self.gateway_user)
-                    if path in {"/api/plans", "/api/plans/batch-edit", "/api/products", "/api/shipments"}:
+                    if is_reconcile or path in {"/api/plans", "/api/plans/batch-edit", "/api/products", "/api/shipments"}:
                         body["owner"] = self.gateway_user
-                if path == "/api/write-access":
+                if is_reconcile:
+                    self._reconcile_post(path, body)
+                    return
+                elif path == "/api/write-access":
                     self._json({"canWrite": True})
                     return
                 elif path == "/api/plans/export-xlsx":

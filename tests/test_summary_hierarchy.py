@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sop.plan_scope import MODEL_PLAN_LABEL, is_model_plan, plan_total
+from sop.reconcile_baseline import capture_baseline
 from sop.store import ConflictError, SOPStore, TZ, ValidationError
 
 
@@ -82,6 +83,21 @@ class SummaryHierarchyTest(unittest.TestCase):
             self.assertEqual(actual["sop"], value)
             self.assertEqual(actual["auto_sop"], 30)
         self.assertEqual({r["product_id"]: r["sop"] for r in self.store.state()["generation_members"]["plans"]}, {"old": 10, "new": 20})
+
+    def test_reconciliation_captures_parent_override_and_separate_members(self):
+        self.save("old", 10)
+        self.save("new", 20)
+        parent = self.parent()["id"]
+        self.save(parent, 80)
+        for snapshot_id in (None, self.store.manual_snapshot("核对")["snapshot"]["id"]):
+            baseline = capture_baseline(self.store, "2026-10", "2026-10", snapshot_id)
+            amounts = {(row["target_id"], row["metric"]): row["quantity"] for row in baseline["records"]}
+            self.assertEqual(amounts[parent, "sop_plan"], 80)
+            self.assertEqual(amounts[parent, "locked_orders"], 30)
+            self.assertEqual(amounts["old", "sop_plan"], 10)
+            self.assertEqual(amounts["new", "sop_plan"], 20)
+            self.assertEqual(amounts["old", "locked_orders"], 7)
+            self.assertEqual(amounts["new", "locked_orders"], 11)
 
     def test_member_model_total_has_priority_even_when_its_name_matches_parent(self):
         self.save("old", 10); self.save("new", 20)
