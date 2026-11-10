@@ -8,11 +8,10 @@ const stockFields = ['opening_stock', 'inbound_actual', 'outbound_actual', 'adju
 const preferredMetrics = ['sop_plan', 'locked_orders', 'supply_plan', 'inbound_actual', 'sales_actual', 'sales_plan', 'transit', 'inbound_forecast', 'opening_stock', 'outbound_actual', 'adjustments', 'closing_stock'];
 const importEntries = [['shared', '共享 Excel'], ['excel', '本地 Excel'], ['text', '粘贴消息'], ['image', '导入截图']];
 const resultViews = {
-  all: {label:'全部结果'},
   locks: {label:'计划与锁单', metrics:['sop_plan', 'locked_orders']},
   supply: {label:'计划与供应', metrics:['sop_plan', 'supply_plan']},
   stock: {label:'库存平衡', metrics:stockFields},
-  issues: {label:'异常核对'},
+  all: {label:'全部指标'},
 };
 const path = id => ROOT + '/' + encodeURIComponent(id);
 
@@ -40,18 +39,18 @@ export function createReconcilePage({
   isActive, getOwner, canWrite, rememberOwner, isOwnerLocked = () => false,
 }) {
   let rounds = [], snapshots = [], currentMonth = '', metrics = {}, detail = null, selectedRound = '';
-  let view = 'results', status = 'pending', resultFilter = 'all', sourceFilter = '', resultTarget = '';
+  let view = 'sources', status = 'pending', resultFilter = 'locks', sourceFilter = '', resultTarget = '';
   let request = 0, pageNumber = 0, selectedRecords = new Set();
 
   const option = (value, label, chosen) =>
     '<option value="' + esc(value) + '"' + (String(value) === String(chosen) ? ' selected' : '') + '>' + esc(label) + '</option>';
-  const action = (key, label, {id='', primary=false, write=false}={}) =>
+  const action = (key, label, {id='', primary=false, write=false, disabled=false}={}) =>
     '<button type="button" class="button small' + (primary ? ' primary' : '') +
     '" data-rec="' + esc(key) + '"' + (id ? ' data-id="' + esc(id) + '"' : '') +
-    (write && !canWrite() ? ' disabled' : '') + '>' + esc(label) + '</button>';
-  const statusBadge = value => '<span class="badge ' +
-    ({pending:'warn', confirmed:'good', excluded:'neutral'}[value] || 'neutral') + '">' +
-    esc(statusNames[value] || value) + '</span>';
+    (disabled || (write && !canWrite()) ? ' disabled' : '') + '>' + esc(label) + '</button>';
+  const statusBadge = (value, blocked) => '<span class="badge ' +
+    (value === 'pending' ? (blocked ? 'warn' : 'neutral') : value === 'confirmed' ? 'good' : 'neutral') + '">' +
+    esc(value === 'pending' ? (blocked ? '待补全' : '可确认') : statusNames[value]) + '</span>';
   const cell = value => '<td>' + esc(value ?? '—') + '</td>';
   const numericCell = value => '<td class="rec-number">' + esc(fmt(value)) + '</td>';
   const date = value => value ? dateText(value) : '—';
@@ -60,6 +59,13 @@ export function createReconcilePage({
   function showSelection() {
     const count = host.querySelector('[data-rec-selected-count]');
     if (count) count.textContent = '已选 ' + selectedRecords.size;
+    for (const button of host.querySelectorAll('[data-rec="confirm-selected"], [data-rec="exclude-selected"]')) {
+      button.disabled = !canWrite() || !selectedRecords.size;
+    }
+  }
+
+  function emptyState(label, control = '') {
+    return '<div class="empty-state rec-empty"><span>' + esc(label) + '</span>' + control + '</div>';
   }
 
   async function download(url, fallbackName, control) {
@@ -84,11 +90,11 @@ export function createReconcilePage({
     }
   }
 
-  function table(headers, rows, emptyLabel) {
+  function table(headers, rows, emptyLabel, {pinActions = false} = {}) {
     const columns = headers.map(label => '<th scope="col">' + esc(label) + '</th>').join('');
     const body = rows.length ? rows.join('') : '<tr><td class="empty-state compact" colspan="' +
       headers.length + '">' + esc(emptyLabel) + '</td></tr>';
-    return '<div class="table-scroll" tabindex="0"><table class="rec-table"><thead><tr>' +
+    return '<div class="table-scroll" tabindex="0"><table class="rec-table' + (pinActions ? ' rec-table-actions' : '') + '"><thead><tr>' +
       columns + '</tr></thead><tbody>' + body + '</tbody></table></div>';
   }
 
@@ -121,12 +127,18 @@ export function createReconcilePage({
       const name = '<td><strong>' + esc(source.name) + '</strong>' +
         (previous ? '<small>上版 ' + esc(previous.name) + ' · ' + esc(date(previous.created_at)) + '</small>' : '') + '</td>';
       return '<tr>' + name + cell(sourceNames[source.type] || source.type) +
-        cell(source.as_of || '—') + cell(date(source.created_at)) + cell(source.owner || '—') +
-        numericCell(count.total) + numericCell(count.pending) +
-        '<td>' + action('source', '查看', {id:source.id}) + '</td></tr>';
+        cell(date(source.created_at)) + cell(source.owner || '—') + numericCell(count.total) +
+        '<td class="rec-number">' + (count.pending ? action('source-pending', '核对 ' + count.pending + ' 条', {id:source.id}) : '0') +
+        '</td><td>' + action('source', '查看原始资料', {id:source.id}) + '</td></tr>';
     });
-    return table(['资料', '类型', '资料日期', '导入时间', '操作人', '记录数', '待确认', '操作'], rows, '暂无资料') +
+    return table(['资料名称', '类型', '导入时间', '操作人', '记录数', '待确认', '操作'], rows, '暂无资料', {pinActions:true}) +
       pager(detail.sources.length);
+  }
+
+  function inbox() {
+    const imports = '<div class="rec-imports" role="group" aria-label="添加资料">' +
+      importEntries.map(([id, label]) => action('import', label, {id, write:true})).join('') + '</div>';
+    return imports + (detail?.sources.length ? sourcesTable() : emptyState('暂无导入资料'));
   }
 
   function filteredRecords() {
@@ -135,6 +147,7 @@ export function createReconcilePage({
   }
 
   function recordsTable() {
+    if (!detail.records.length) return emptyState('暂无待确认记录', action('view', '打开收件箱', {id:'sources'}));
     const byId = new Map(detail.sources.map(source => [source.id, source]));
     const byTarget = new Map(detail.targets.map(target => [target.id, target.label]));
     const records = filteredRecords();
@@ -146,8 +159,9 @@ export function createReconcilePage({
         (selectedRecords.has(record.id) ? ' checked' : '') + (!canWrite() ? ' disabled' : '') + '></td>';
       const errors = record.confirmation_errors || [];
       return '<tr>' + check + cell(name || '未关联') + cell(detail.metrics[record.metric] || '—') +
-        cell(record.period || '—') + cell(record.location || '—') + numericCell(record.quantity) +
-        '<td>' + statusBadge(record.status) + (errors.length ? '<small class="rec-review-error" title="' +
+        '<td>' + esc(record.period || '未识别') + (record.location ? '<small>' + esc(record.location) + '</small>' : '') + '</td>' +
+        numericCell(record.quantity) + '<td>' + statusBadge(record.status, errors.length) +
+        (record.status === 'pending' && errors.length ? '<small class="rec-review-error" title="' +
           esc(errors.join('；')) + '">' + esc(errors[0]) + (errors.length > 1 ? ' 等 ' + errors.length + ' 项' : '') + '</small>' : '') + '</td>' +
         '<td>' + (source ? action('source', source.name, {id:source.id}) : '—') +
         '<small>' + esc(record.source_ref || '') + '</small></td>' +
@@ -159,11 +173,17 @@ export function createReconcilePage({
       option('', '全部', sourceFilter) + detail.sources.map(source => option(source.id, source.name, sourceFilter)).join('') +
       '</select></label><span class="rec-count">' + records.length + ' 条</span><div class="rec-actions">' +
       '<span class="rec-count" data-rec-selected-count aria-live="polite">已选 ' + selectedRecords.size + '</span>' +
-      action('select-page', '选择本页', {write:true}) +
-      action('confirm-selected', '确认所选', {write:true}) +
-      action('exclude-selected', '排除所选', {write:true}) + '</div></div>';
-    return filters + table(['选择', '车型', '指标', '期间', '库区', '数量', '状态', '资料 / 位置', '操作'],
-      rows, '没有符合条件的记录') + pager(records.length);
+      action('select-page', '选择本页', {write:true, disabled:!records.length}) +
+      action('confirm-selected', '确认所选', {primary:true, write:true, disabled:!selectedRecords.size}) +
+      action('exclude-selected', '排除所选', {write:true, disabled:!selectedRecords.size}) + '</div></div>';
+    if (status === 'pending' && !records.length) {
+      if (sourceFilter && detail.records.some(record => record.status === 'pending')) {
+        return filters + emptyState('该资料没有待确认记录', action('view', '查看全部待确认', {id:'records'}));
+      }
+      return filters + emptyState('暂无待确认记录', action('view', '查看对账结果', {id:'results'}));
+    }
+    return filters + table(['选择', '车型', '指标', '期间 / 库区', '数量', '核对状态', '原始资料', '操作'],
+      rows, '没有符合条件的记录', {pinActions:true}) + pager(records.length);
   }
 
   function groupsTable() {
@@ -195,7 +215,8 @@ export function createReconcilePage({
         const value = group.values?.[key], baseline = group.baseline_values?.[key];
         const partial = group.partial_baseline_metrics?.includes(key);
         const note = partial ? '基准部分覆盖' : value == null && baseline != null ? '基准 ' + fmt(baseline) : '';
-        return '<td class="rec-number">' + esc(fmt(value)) + (note ? '<small>' + esc(note) + '</small>' : '') + '</td>';
+        const display = group.conflicts?.includes(key) ? '<span class="badge warn">冲突</span>' : esc(fmt(value));
+        return '<td class="rec-number">' + display + (note ? '<small>' + esc(note) + '</small>' : '') + '</td>';
       }).join('') +
       (showGap ? '<td class="rec-number' + (group.supply_gap > 0 ? ' rec-shortfall' : '') + '">' +
       esc(fmt(group.supply_gap)) + (gapNote(group) ? '<small>' + esc(gapNote(group)) + '</small>' : '') + '</td>' : '') +
@@ -207,9 +228,8 @@ export function createReconcilePage({
   function issuesTable() {
     const byKey = new Map((detail?.result?.groups || []).map(group => [group.key, group]));
     const records = new Map([...(detail?.records || []), ...(detail?.baseline_records || [])].map(record => [record.id, record]));
-    const issues = (detail?.result?.issues || []).filter(issue => !resultTarget ||
-      byKey.get(issue.group_key)?.target_id === resultTarget ||
-      (issue.record_ids || []).some(id => records.get(id)?.target_id === resultTarget));
+    const issues = detail.result?.issues || [];
+    if (!issues.length) return emptyState('暂无异常');
     const rows = visiblePage(issues).map(issue => {
       const group = byKey.get(issue.group_key);
       const hasRecords = (issue.record_ids || []).some(id => records.has(id));
@@ -217,21 +237,43 @@ export function createReconcilePage({
         '<td class="rec-wrap">' + esc(issue.detail) + '</td><td>' +
         (hasRecords ? action('issue', '查看关联记录', {id:issue.id}) : '') + '</td></tr>';
     });
-    return table(['异常', '车型 / 期间', '差异', '操作'], rows, detail ? '暂无异常' : '暂无对账批次') + pager(issues.length);
+    return table(['异常', '车型 / 期间', '差异', '操作'], rows, '暂无异常', {pinActions:true}) + pager(issues.length);
   }
 
   function resultsTable() {
     const targetIds = new Set((detail?.result?.groups || []).map(group => group.target_id));
     const targets = (detail?.targets || []).filter(target => targetIds.has(target.id));
-    const toggles = '<div class="rec-row rec-filter"><div class="segmented rec-segmented" role="group" aria-label="对账项目">' +
+    const toggles = '<div class="segmented rec-segmented" role="group" aria-label="对账项目">' +
       Object.entries(resultViews).map(([key, item]) => '<button type="button" data-rec="result-filter" data-id="' + key +
-        '" aria-pressed="' + (resultFilter === key) + '">' +
-        item.label + (key === 'issues' && detail ? ' ' + (detail.result?.issues?.length || 0) : '') + '</button>').join('') +
-      '</div>' + (detail ? '<label class="field inline-field">车型<select data-rec-change="result-target">' +
+        '" aria-pressed="' + (resultFilter === key) + '">' + item.label + '</button>').join('') + '</div>';
+    const picker = '<label class="field inline-field">车型<select data-rec-change="result-target">' +
       option('', '全部车型及版本', resultTarget) +
       targets.map(target => option(target.id, target.label, resultTarget)).join('') +
-      '</select></label>' : '') + '</div>';
-    return toggles + (resultFilter === 'issues' ? issuesTable() : groupsTable());
+      '</select></label>';
+    const snapshot = snapshots.find(item => String(item.id) === String(detail.snapshot_id));
+    const baseline = snapshot ? '基准快照 · ' + snapshot.label : 'SOP 基准 · ' + date(detail.baseline_at);
+    const tools = '<div class="rec-row rec-filter"><span class="rec-count">' + esc(baseline) + '</span>' +
+      '<div class="rec-actions">' + action('baseline', '更新基准', {write:true}) +
+      action('export', '导出 Excel') + action('summary', '例会摘要') + '</div></div>';
+    return tools + '<div class="rec-row rec-filter">' + toggles + picker + '</div>' + groupsTable();
+  }
+
+  function workflow(activeView) {
+    const pending = detail?.records.filter(record => record.status === 'pending').length || 0;
+    const steps = [
+      ['sources', '资料收件箱', detail?.sources.length || 0, '份'],
+      ['records', '待确认', pending, '条'],
+      ['results', '对账结果', detail?.result?.groups?.length || 0, '组'],
+      ['issues', '异常核对', detail?.result?.issues?.length || 0, '项'],
+    ];
+    return '<nav class="rec-steps" aria-label="对账流程">' + steps.map(([key, label, count, unit], index) => {
+      const isCurrent = key === activeView;
+      return '<button type="button" class="rec-step" data-rec="view" data-id="' + key +
+        '" aria-pressed="' + isCurrent + '"' + (!detail && key !== 'sources' ? ' disabled' : '') + '>' +
+        '<span class="rec-step-index" aria-hidden="true">' + (index + 1) + '</span><span>' + label +
+        '</span><span class="rec-step-count' + (count && (key === 'records' || key === 'issues') ? ' attention' : '') +
+        '">' + count + ' ' + unit + '</span></button>';
+    }).join('') + '</nav>';
   }
 
   function render() {
@@ -241,27 +283,12 @@ export function createReconcilePage({
         ? rounds.map(round => option(round.id, round.name, selectedRound)).join('')
         : option('', '暂无批次', '')) + '</select></label>';
     const primary = '<div class="rec-row rec-toolbar">' + picker +
-      (detail ? '<span class="rec-period">' + esc(detail.start_month + ' 至 ' + detail.end_month) + '</span>' : '') +
-      '<div class="rec-actions">' + action('new', '新建对账', {write:true}) +
-      (detail ? action('baseline', '更新基准', {write:true}) : '') +
-      '</div><div class="rec-imports" role="group" aria-label="导入资料">' +
-      importEntries.map(([id, label]) => action('import', label, {id, primary:id === 'shared', write:true})).join('') +
-      '</div></div>';
-    const pending = detail?.records.filter(record => record.status === 'pending').length || 0;
-    const activeView = detail ? view : 'results';
-    const labels = {sources:'资料', records:'待确认' + (pending ? ' ' + pending : ''), results:'对账结果'};
-    const tabs = '<div class="segmented" role="group" aria-label="对账视图">' + Object.entries(labels)
-      .map(([key, label]) => '<button type="button" data-rec="view" data-id="' + key +
-        '" aria-pressed="' + (activeView === key) + '"' + (!detail && key !== 'results' ? ' disabled' : '') +
-        '>' + esc(label) + '</button>').join('') + '</div>';
-    const snapshot = snapshots.find(item => String(item.id) === String(detail?.snapshot_id));
-    const caption = detail ? '<span class="rec-count">' + esc(snapshot ? '快照 ' + snapshot.label : 'SOP 基准') +
-      ' · ' + esc(date(detail.baseline_at)) + '</span>' : '';
-    const exports = detail && activeView === 'results' ? '<div class="rec-actions">' + action('export', '导出 Excel') +
-      action('summary', '导出摘要') + '</div>' : '';
-    const content = activeView === 'sources' ? sourcesTable() : activeView === 'records' ? recordsTable() : resultsTable();
-    host.innerHTML = primary + '<section class="card rec-card"><div class="rec-row rec-filter">' + tabs + caption +
-      exports + '</div>' + content + '</section>';
+      (detail ? '<span class="rec-period">' + esc(detail.start_month === detail.end_month ? detail.start_month :
+        detail.start_month + ' 至 ' + detail.end_month) + '</span>' : '') +
+      '<div class="rec-actions">' + action('new', '新建批次', {write:true}) + '</div></div>';
+    const activeView = detail ? view : 'sources';
+    const panels = {sources:inbox, records:recordsTable, results:resultsTable, issues:issuesTable};
+    host.innerHTML = primary + workflow(activeView) + '<section class="card rec-card">' + panels[activeView]() + '</section>';
   }
 
   async function load() {
@@ -287,6 +314,7 @@ export function createReconcilePage({
   }
 
   function ownerInput() {
+    if (isOwnerLocked()) return '<input type="hidden" name="owner" value="' + esc(getOwner()) + '">';
     return '<label class="field">操作人<input id="rec-owner" name="owner" maxlength="100" required value="' +
       esc(getOwner()) + '"></label>';
   }
@@ -347,7 +375,7 @@ export function createReconcilePage({
     async values => {
       const created = await api(ROOT, values);
       selectedRound = created.id;
-      view = 'results';
+      view = 'sources';
       sourceFilter = '';
       resultTarget = '';
       clearSelection();
@@ -397,14 +425,17 @@ export function createReconcilePage({
   async function saveChanges(changes, owner) {
     detail = await api(roundPath() + '/records', {revision:detail.revision, owner, changes});
     selectedRecords.clear();
-    if (view === 'records' && status === 'pending' && changes.some(change => ['confirmed', 'excluded'].includes(change.status)) &&
-        !detail.records.some(record => record.status === 'pending')) {
-      view = 'results';
-      resultFilter = 'all';
-      pageNumber = 0;
-    }
     render();
     toast('记录已更新');
+  }
+
+  function openSourceRecords(id, nextStatus) {
+    sourceFilter = id;
+    status = nextStatus;
+    view = 'records';
+    clearSelection();
+    render();
+    host.querySelector('.rec-steps [data-id="records"]')?.focus();
   }
 
   function bulk(nextStatus) {
@@ -427,23 +458,41 @@ export function createReconcilePage({
     const source = await api(sourcePath);
     if (!isActive() || detail?.id !== selected) return;
     const raw = source.raw_text ? '<pre class="rec-evidence">' + esc(source.raw_text) + '</pre>' : '';
+    const hasRecords = detail.records.some(record => record.source_id === id);
     openDialog('<h2>' + esc(source.name) + '</h2><div class="rec-count">' +
-      esc(sourceNames[source.type] || source.type) + ' · ' + esc(source.as_of || date(source.created_at)) +
+      esc(sourceNames[source.type] || source.type) + ' · 导入于 ' + esc(date(source.created_at)) +
+      (source.as_of ? ' · 资料日期 ' + esc(source.as_of) : '') +
       '</div>' + raw + '<div class="dialog-actions">' +
-      '<button type="button" class="button" data-rec-source-records>查看记录</button>' +
+      (hasRecords ? '<button type="button" class="button" data-rec-source-records>查看记录</button>' : '') +
       (source.has_file ? '<button type="button" class="button" data-rec-source-download>下载原件</button>' : '') + '</div>');
-    document.querySelector('[data-rec-source-records]').addEventListener('click', () => {
-      sourceFilter = id;
-      status = '';
-      view = 'records';
-      clearSelection();
+    document.querySelector('[data-rec-source-records]')?.addEventListener('click', () => {
       closeDialog();
-      render();
+      openSourceRecords(id, '');
     });
     document.querySelector('[data-rec-source-download]')?.addEventListener('click', async event => {
       try { await download(sourcePath + '/download', source.name, event.currentTarget); }
       catch (error) { toast(error.message, true); }
     });
+  }
+
+  async function summaryDialog(button) {
+    const selected = detail.id;
+    const url = roundPath() + '/summary';
+    button.disabled = true;
+    try {
+      const response = await serviceFetch(url);
+      if (!response.ok) throw new Error('读取摘要失败，请重试。');
+      const text = await response.text();
+      if (!isActive() || detail?.id !== selected || view !== 'results') return;
+      openDialog('<h2>例会摘要</h2><pre class="rec-evidence rec-summary">' + esc(text) +
+        '</pre><div class="dialog-actions"><button type="button" class="button" data-rec-summary-download>下载摘要</button></div>');
+      document.querySelector('[data-rec-summary-download]').addEventListener('click', async event => {
+        try { await download(url, 'SOP对账摘要.txt', event.currentTarget); }
+        catch (error) { toast(error.message, true); }
+      });
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function issueDialog(id) {
@@ -492,6 +541,8 @@ export function createReconcilePage({
         return detail;
       },
       onImported(updated, operator) {
+        const existing = new Set(detail?.sources.map(source => source.id));
+        const newSources = updated.sources.filter(source => !existing.has(source.id));
         detail = updated;
         rememberOwner(operator);
         if (!updated.added_records) {
@@ -502,11 +553,7 @@ export function createReconcilePage({
           render();
           return;
         }
-        view = 'records';
-        status = 'pending';
-        sourceFilter = '';
-        clearSelection();
-        render();
+        openSourceRecords(newSources.length === 1 ? newSources[0].id : '', 'pending');
       },
     });
   }
@@ -521,10 +568,11 @@ export function createReconcilePage({
       else if (rec === 'baseline') changeBaseline();
       else if (rec === 'import') await addSource(id);
       else if (rec === 'source') await sourceDialog(id);
+      else if (rec === 'source-pending') openSourceRecords(id, 'pending');
       else if (rec === 'record') recordDialog(detail.records.find(record => record.id === id));
       else if (rec === 'issue') issueDialog(id);
       else if (rec === 'export') await download(roundPath() + '/export', 'SOP资料对账.xlsx', button);
-      else if (rec === 'summary') await download(roundPath() + '/summary', 'SOP对账摘要.txt', button);
+      else if (rec === 'summary') await summaryDialog(button);
       else if (rec === 'confirm-selected') bulk('confirmed');
       else if (rec === 'exclude-selected') bulk('excluded');
       else if (rec === 'select-page') {
@@ -535,7 +583,7 @@ export function createReconcilePage({
         showSelection();
       } else if (rec === 'view' || rec === 'result-filter') {
         if (rec === 'view') {
-          if (view !== id && id === 'records') {
+          if (id === 'records') {
             status = 'pending';
             sourceFilter = '';
           }
@@ -566,8 +614,10 @@ export function createReconcilePage({
       clearSelection();
       if (recChange === 'round') {
         selectedRound = event.target.value;
+        view = 'sources';
         sourceFilter = '';
         resultTarget = '';
+        resultFilter = 'locks';
         await load();
       } else {
         if (recChange === 'status') status = event.target.value;
