@@ -401,13 +401,14 @@ class SOPStore:
         rules = self._generation_rules()
         catalog = self._catalog_items()
         if include_excluded:
-            return {**data, "products": catalog}
+            return {key: value for key, value in {**data, "products": catalog}.items() if key != "option_mix_sheets"}
         known = {row[0] for row in self.db.execute("SELECT generation FROM generation_summary_history")}
         mode = self.settings().get("generation_mode", "detail")
         # Filter raw summary identities before aliases can mix them with real
         # versions. Both modes use single-generation values as their foundation.
         source, _ = project_generation_sources(data, "detail", rules, known)
         result = {**self._remap_sales(source, self.source_aliases()), "products": catalog}
+        result.pop("option_mix_sheets", None)
         try:
             if mode == "summary":
                 result, warnings = project_generation_hierarchy(result, rules, known)
@@ -1332,6 +1333,7 @@ class SOPStore:
             state[row["entity"]][row["entity_key"]] = json.loads(row["after_json"])
         sales = self.db.execute(f"SELECT * FROM sales_versions WHERE recorded_at {operator} ? ORDER BY recorded_at DESC,id DESC LIMIT 1", (cutoff_text,)).fetchone()
         payload = json.loads(sales["payload"]) if sales else {"products": [], "sales": [], "meta": {}, "sources": []}
+        payload.pop("option_mix_sheets", None)
         catalog = self.db.execute(f"SELECT id,payload FROM catalog_versions WHERE recorded_at {operator} ? ORDER BY recorded_at DESC,id DESC LIMIT 1", (cutoff_text,)).fetchone()
         if catalog:
             catalog_products = json.loads(catalog["payload"])

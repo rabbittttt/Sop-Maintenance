@@ -357,7 +357,12 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     state["source_refresh"] = source_refresh.status()
                     self._json(state)
                 elif path == "/api/option-mix":
-                    self._json(read_option_mix(source_directory(getattr(source_refresh, "root", ROOT))))
+                    with store.lock:
+                        published_sheets = store._read_source_sales().get("option_mix_sheets")
+                    if published_sheets is None:
+                        self._json({"error": "选配来源等待首次稳定刷新，请稍后重试。"}, 503)
+                        return
+                    self._json(read_option_mix(published_sheets=published_sheets))
                 elif path == "/api/reconcile" or path.startswith("/api/reconcile/"):
                     self._reconcile_get(path)
                 elif path == "/api/products":
@@ -605,7 +610,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     if snapshot_backup:
                         result["excel_backup"] = snapshot_backup.ensure(result["snapshot"]["id"])
                 elif path == "/api/refresh":
-                    result = source_refresh.refresh()
+                    result = source_refresh.poll(force=True)
                 else:
                     self._json({"error": "接口不存在。"}, 404)
                     return
@@ -677,20 +682,17 @@ def main():
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                             handlers=[logging.StreamHandler(), logging.FileHandler(
                                 args.data_dir / "service.err.log", encoding="utf-8")], force=True)
-        if not (args.data_dir / "sales.json").exists():
-            importlib.import_module("sop.data").refresh(output_path=args.data_dir / "sales.json")
         store = SOPStore(args.data_dir / "sop.sqlite3", args.data_dir / "sales.json")
         store.ensure_daily_snapshots()
         workbook_sync = WorkbookSync(store, args.plan_file, auto_create=False, frontend_only=True)
-        workbook_sync.sync()
         source_refresh = SalesRefresh(store, workbook_sync, root=ROOT)
+        source_refresh.poll()  # Start the first one-minute stability window immediately.
         snapshot_backup = SnapshotBackup(store)
 
         def daily_worker():
             while not stop.wait(8):
                 try:
                     store.ensure_daily_snapshots()
-                    workbook_sync.sync()
                     source_refresh.poll()
                 except Exception:
                     LOGGER.exception("Daily snapshot failed; will retry")

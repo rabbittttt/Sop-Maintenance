@@ -1451,7 +1451,7 @@ async function handleAction(action,el) {
   if(action==='detail-edit'){closeDialog();return editInGrid(el.dataset.product);}
   if(action==='edit-shipments')return editShipments();
   if(action==='save-settings'){await api('/api/settings',{bridge_m6:$('#bridge-toggle').checked});await load();return toast('计划范围规则已保存');}
-  if(action==='refresh-sales') {el.disabled=true;const text=el.textContent;el.textContent='正在读取…';try{await api('/api/refresh',{});await load();toast('销量已刷新，人工计划已保留');}finally{el.disabled=false;el.textContent=text;}return;}
+  if(action==='refresh-sales') {el.disabled=true;const text=el.textContent;el.textContent='正在检查…';try{const result=await api('/api/refresh',{});await load();toast(result.status==='waiting'?result.message:result.status==='unchanged'?'来源文件没有新修改': '销量已刷新，人工计划已保留');}finally{el.disabled=false;el.textContent=text;}return;}
   if(action==='refresh-backups')return historyPage();
   if(action==='create-snapshot') {
     openDialog(`<form id="snapshot-form"><h2>保存会议快照</h2><label class="field">快照名称<input id="snapshot-label" value="${state.current_month} SOP会议" required maxlength="100"></label><div id="form-error" class="inline-error"></div><div class="dialog-actions">${button('取消','close-dialog')}<button class="button primary" type="submit">保存快照</button></div></form>`);

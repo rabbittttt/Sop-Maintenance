@@ -112,7 +112,8 @@ class DeploymentPathsTest(unittest.TestCase):
                 self.assertEqual(sop_data._resolve_lock_basis(), 'model_lock_row')
                 watcher = SalesRefresh(None, root=root / 'service')
                 names = {item[0] for item in watcher.fingerprint()}
-                self.assertIn(str(source / 'source.xlsx'), names)
+                self.assertIn(str(source / '鸿蒙智行锁单选配比例分析.xlsx'), names)
+                self.assertNotIn(str(source / 'source.xlsx'), names)
                 self.assertIn(str(data / 'source_settings.json'), names)
                 self.assertFalse(any('service' in name for name in names))
 

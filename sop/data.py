@@ -1,10 +1,4 @@
-"""Read-only extraction of configuration-version monthly source references.
-
-Only the version/quantity blocks in monthly option workbooks feed plan products.
-Other option dimensions and aggregate rows are never appended. Consolidated
-daily generation totals are isolated references, never assigned to a version.
-Unknown data stays unknown, and source metric ambiguities remain visible.
-"""
+"""Read model and version lock quantities from the monthly lock-option workbook."""
 from __future__ import annotations
 
 import argparse
@@ -313,8 +307,6 @@ def _extract_generation_reference(source_dir=None, *, as_of=None):
 
 
 VERSION_METRICS = [
-    {"id": "net_orders", "label": "净大定（版本参考）", "unit": "单",
-     "source_file": "鸿蒙智行大定选配比例分析.xlsx", "control_label": "净大定"},
     {"id": "delivery_reference", "label": "锁单来源版本数量", "unit": "单",
      "source_file": "鸿蒙智行锁单选配比例分析.xlsx", "control_label": "交车锁单"},
 ]
@@ -334,11 +326,11 @@ def _month(value):
 
 
 def _extract_version_reference(source_dir=None, *, as_of=None):
-    """Read true configuration-version monthly quantities, plus isolated references.
+    """Read configuration-version monthly quantities from the lock workbook.
 
     Missing cells stay absent. A source month's end day is not fabricated from
-    the workbook mtime, another tab, or the consolidated daily reference. IDs
-    encode generation and configuration, so year-model changes remain separate.
+    the workbook mtime or another tab. IDs encode generation and configuration,
+    so year-model changes remain separate.
     """
     source_dir = Path(source_dir) if source_dir is not None else source_directory(ROOT)
     now = datetime.now(SHANGHAI)
@@ -420,12 +412,9 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
             workbook.close()
     if not products:
         raise ValueError("未在选配月表找到真实版本数量块，未替换已有数据")
-    # Reference-only generation data never enters the configuration product set.
-    reference = _extract_generation_reference(source_dir, as_of=observation) if (source_dir / SOURCE_NAME).exists() else None
     months = sorted({r["month"] for r in sales})
     latest_month = months[-1] if months else None
     discrepancies = [r for r in checks if r["difference"] not in (None, 0)]
-    option_conflicts = _option_consistency(source_dir)
     metric_coverage = {}
     for metric in VERSION_METRICS:
         records = [r for r in sales if r["metric"] == metric["id"]]
@@ -445,7 +434,6 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
         {"level": "warning", "code": "unknown_month_cutoff", "message": "版本月表未注明精确截止日，且与日表不能直接对齐；所有月值均作为来源参考，完整月状态未确认。"},
         {"level": "warning", "code": "version_control_difference", "message": f"{len(discrepancies)} 项车型月版本合计与同页小计存在差异，保留原数，不假定差异原因。", "count": len(discrepancies), "examples": discrepancies[:5]},
         {"level": "info", "code": "version_lock_source_rows", "message": "锁单选配表的版本数量取“版本/数量”明细，车型锁单取“交车锁单/数量”总行；两者原值独立保留。"},
-        {"level": "warning", "code": "brand_control_conflicts", "message": f"源表有 {len(option_conflicts)} 项品牌小计与车型合计不同；看板只汇总真实版本行，不叠加品牌或车型总计。", "count": len(option_conflicts), "examples": option_conflicts[:3]},
     ]
     if missing:
         quality.append({"level": "warning", "code": "missing_version_cells", "message": f"{len(missing)} 个版本月单元格缺失，未补0。", "count": len(missing)})
@@ -453,23 +441,22 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
         "meta": {"generated_at": now.isoformat(timespec="seconds"), "timezone": "Asia/Shanghai",
                  "observation_date": observation.isoformat(), "data_through": latest_month, "latest_month": latest_month,
                  "data_through_label": f"{latest_month}（月表，截止日未提供）", "exact_cutoff_date": None,
-                 "source_files": [_source_file(p) for p in sales_source_files(source_dir)],
-                 "default_metric": "net_orders", "metrics": VERSION_METRICS, "metric_coverage": metric_coverage,
+                 "source_files": [_source_file(source_dir / "鸿蒙智行锁单选配比例分析.xlsx")],
+                 "default_metric": "delivery_reference", "metrics": VERSION_METRICS, "metric_coverage": metric_coverage,
                  "unit": "单", "product_grain": "年款内具体配置版本", "brands": ["问界", "智界", "享界", "尊界", "尚界"],
                  "notes": [
                      "真实版本：仅从车型by月表中“版本/数量”块提取，不把年款或二级代际冒充配置版本。",
                      "原始来源完整保留；当前展示按共享 MERGE_GROUPS 规则选择单代际或派生汇总代际，合计不混用两层数据。",
                      "不同年款独立；品牌、车型、版本逐级汇总，但不叠加原品牌总计、车型总计及其他选配维度。",
-                     "大定选配表版本数量按净大定参考；锁单选配表版本数量与交车锁单总行分别读取，不要求合计相等。",
+                     "锁单选配表版本数量与交车锁单总行分别读取，不要求合计相等。",
                      "月表最后一列“总计”部分行实际等于最后一个月，未作为跨月总计使用。",
                      "所有原始数量保持不变。版本合计与小计的±1差异不擅自修正或归因为四舍五入。",
-                     "汇总文件代际日量保存在单独 reference 区域，未拆分为配置销量，未计入版本合计。",
                      "缺失月、空白和未知截止日均不补0；文件更新时间不作为数据日期。",
                  ], "quality": quality, "reconciliation": checks},
         "products": sorted(products.values(), key=lambda p: (p["brand"], p["model"], p["version"])),
         "sales": sorted(sales, key=lambda r: (r["month"], r["product_id"], r["metric"])),
         "sources": sources,
-        "reference": {"description": "代际级逐日汇总参考，不属于配置版本月度实际量。", **reference} if reference else None,
+        "reference": None,
     }
     return result
 
@@ -616,8 +603,8 @@ def _build_lock_data(version_data, model_sales, basis):
         "车型月锁单来自同页“交车锁单/数量”行，只在车型完整选中时独立显示，不与配置版本数叠加。",
         "只取月份列；源表“总计”列不参与跨月相加。缺失保持空白，明确的0保留为0。",
         "原始版本数量已排除在锁单口径之外；版本锁单无数据，不按占比或其他指标分摊。" if model_only else
-        "版本数量按来源原值展示，不按车型总量分摊；净大定与代际日量另作参考。" if confirmed else
-        "净大定和原锁单选配版本数仅在 version_reference 中留存，代际日量仅在 reference 中留存。",
+        "版本数量按来源原值展示，不按车型总量分摊。" if confirmed else
+        "版本数量原值仅在 version_reference 中留存。",
         "月表未提供精确截止日，不用日表日期或文件修改时间冒充月表截止日。",
     ]
     sources = [dict(source) for source in version_data["sources"]]
@@ -655,7 +642,10 @@ def extract(source_dir=None, *, as_of=None, version_lock_basis=None):
 
 def refresh(source_dir=None, output_path=None, *, as_of=None, version_lock_basis=None):
     """Refresh the local JSON atomically from configured sources; never modify them."""
+    source_dir = Path(source_dir) if source_dir is not None else source_directory(ROOT)
     result = extract(source_dir, as_of=as_of, version_lock_basis=version_lock_basis)
+    from .option_mix import source_sheets
+    result["option_mix_sheets"] = source_sheets(source_dir)
     output_path = Path(output_path) if output_path is not None else runtime_data_directory(ROOT) / "sales.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")

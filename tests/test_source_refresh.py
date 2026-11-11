@@ -1,4 +1,4 @@
-"""Source polling must preserve good data and import workbook edits first."""
+"""Five-minute source scan with one-minute stability and last-good retention."""
 import json
 import tempfile
 import threading
@@ -24,7 +24,7 @@ class SourceRefreshTest(unittest.TestCase):
         self.store = SOPStore(self.root / "test.sqlite3", self.sales, lambda: datetime(2026, 10, 24, 12, tzinfo=TZ))
         self.calls = []
         self.time = 0
-        self.watcher = SalesRefresh(self.store, root=self.root, reader=self.read, interval=60, clock=lambda: self.time)
+        self.watcher = SalesRefresh(self.store, root=self.root, reader=self.read, clock=lambda: self.time)
 
     def tearDown(self):
         self.store.close()
@@ -36,9 +36,9 @@ class SourceRefreshTest(unittest.TestCase):
         output_path.write_text(json.dumps(data), encoding="utf-8")
         return data
 
-    def tick(self):
-        self.watcher.poll()
-        self.time += 60
+    def tick(self, at, *, force=False):
+        self.time = at
+        return self.watcher.poll(force=force)
 
     def test_maintenance_workbook_does_not_trigger_sales_refresh(self):
         before = self.watcher.fingerprint()
@@ -48,32 +48,69 @@ class SourceRefreshTest(unittest.TestCase):
         plan.write_bytes(b"revised plan")
         self.assertEqual(self.watcher.fingerprint(), before)
         self.assertEqual(sales_source_files(self.root / "input_file"), [self.source])
+        (self.root / "input_file/unrelated.xlsx").write_bytes(b"other report")
+        self.assertEqual(self.watcher.fingerprint(), before)
         self.source.write_bytes(b"new sales")
         self.assertNotEqual(self.watcher.fingerprint(), before)
 
-    def test_reads_only_after_two_stable_checks_and_only_when_changed(self):
-        self.tick()
+    def test_five_minute_scan_and_one_minute_stability(self):
+        self.assertEqual(self.tick(0)["status"], "waiting")
         self.assertEqual(self.calls, [])
-        self.tick()
+        self.tick(59)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.tick(60)["status"], "synced")
         self.assertEqual(self.calls, ["read"])
-        self.tick()
+        self.tick(359)
         self.assertEqual(self.calls, ["read"])
         self.source.write_bytes(b"changed source")
-        self.tick()
+        self.tick(360)
         self.assertEqual(self.calls, ["read"])
-        self.tick()
+        self.tick(419)
+        self.assertEqual(self.calls, ["read"])
+        self.assertEqual(self.tick(420)["status"], "synced")
         self.assertEqual(self.calls, ["read", "read"])
         self.assertEqual(self.watcher.status()["status"], "synced")
 
+    def test_change_during_stability_restarts_the_minute(self):
+        self.tick(0)
+        self.source.write_bytes(b"intermediate")
+        self.assertEqual(self.tick(60)["status"], "waiting")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.tick(119, force=True)["status"], "waiting")
+        self.assertEqual(self.tick(120)["status"], "synced")
+        self.assertEqual(self.calls, ["read"])
+
+    def test_manual_check_respects_stability_and_does_not_claim_early_success(self):
+        self.assertEqual(self.tick(0, force=True)["status"], "waiting")
+        self.assertEqual(self.tick(59, force=True)["status"], "waiting")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.tick(60, force=True)["status"], "synced")
+        self.assertEqual(self.tick(61, force=True)["status"], "unchanged")
+
+    def test_reverted_change_cannot_reuse_an_old_stability_window(self):
+        observed = ["original"]
+        with patch.object(self.watcher, "fingerprint", side_effect=lambda: tuple(observed)):
+            self.tick(0)
+            self.tick(60)
+            observed[0] = "temporary"
+            self.assertEqual(self.tick(360)["status"], "waiting")
+            observed[0] = "original"
+            self.assertEqual(self.tick(420)["status"], "unchanged")
+            observed[0] = "temporary"
+            self.assertEqual(self.tick(720)["status"], "waiting")
+            self.assertEqual(self.tick(779, force=True)["status"], "waiting")
+            self.assertEqual(self.tick(780)["status"], "synced")
+        self.assertEqual(self.calls, ["read", "read"])
+
     def test_invalid_refresh_retains_last_data_and_retries(self):
         previous = self.sales.read_bytes()
-        self.tick()
+        self.tick(0)
         with patch.object(self.store, "validate_source_data", side_effect=ValidationError("conflict")):
-            self.tick()
+            self.tick(60)
         self.assertEqual(self.sales.read_bytes(), previous)
         self.assertEqual(self.watcher.status()["status"], "error")
         self.assertEqual(list(self.root.glob(".sales-*.pending.json")), [])
-        self.tick()
+        self.tick(120)
         self.assertEqual(self.watcher.status()["status"], "synced")
 
     def test_file_changed_during_read_is_not_published(self):

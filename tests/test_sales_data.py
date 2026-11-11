@@ -95,8 +95,7 @@ class SalesMetricSafetyTests(unittest.TestCase):
             root = Path(directory)
             for metric in sop_data.VERSION_METRICS:
                 (root / metric["source_file"]).touch()
-            with patch.object(sop_data.openpyxl, "load_workbook", return_value=Book()), \
-                 patch.object(sop_data, "_option_consistency", return_value=[]):
+            with patch.object(sop_data.openpyxl, "load_workbook", return_value=Book()):
                 result = sop_data._extract_version_reference(root, as_of="2026-10-26")
         check = next(row for row in result["meta"]["reconciliation"]
                      if row["metric"] == "delivery_reference")
@@ -181,7 +180,8 @@ class SalesMetricSafetyTests(unittest.TestCase):
             self.assertFalse(settings.exists())
             with patch.dict(os.environ, {"SOP_DATA_DIR": str(data_dir), "SOP_SOURCE_DIR": str(input_dir)}), \
                  patch.object(sop_data, "_extract_version_reference", return_value=source), \
-                 patch.object(sop_data, "_model_monthly_locks", return_value=models):
+                 patch.object(sop_data, "_model_monthly_locks", return_value=models), \
+                 patch("sop.option_mix.source_sheets", return_value={}):
                 for attempt in range(2):
                     with self.subTest(refresh=attempt + 1):
                         result = sop_data.refresh(as_of="2026-11-06")
@@ -211,7 +211,8 @@ class SalesMetricSafetyTests(unittest.TestCase):
             settings = root / "source_settings.json"
             with patch.dict(os.environ, {"SOP_DATA_DIR": str(root)}), \
                  patch.object(sop_data, "_extract_version_reference", return_value=source), \
-                 patch.object(sop_data, "_model_monthly_locks", return_value=models):
+                 patch.object(sop_data, "_model_monthly_locks", return_value=models), \
+                 patch("sop.option_mix.source_sheets", return_value={}):
                 for basis in ("model_lock_row", "unconfirmed"):
                     with self.subTest(basis=basis):
                         settings.write_text(json.dumps({"version_lock_basis": basis}), encoding="utf-8")

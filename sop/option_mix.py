@@ -169,10 +169,22 @@ def _source_rows(path):
             raise OptionMixError(f"无法读取锁单选配表：{error}") from error
 
 
-def read_option_mix(source_dir=None):
-    """Return original displayed shares and dynamically map summary source names."""
+def source_sheets(source_dir=None):
+    """Parse the same source version as monthly locks before it is published."""
     path = Path(source_dir) / SOURCE_NAME if source_dir is not None else source_directory(PROJECT_ROOT) / SOURCE_NAME
     sheets, status, error = _source_rows(path)
+    if status != "ready":
+        raise OptionMixError(error or "选配来源尚未稳定。")
+    return sheets
+
+
+def read_option_mix(source_dir=None, *, published_sheets=None):
+    """Return original displayed shares and dynamically map summary source names."""
+    if published_sheets is None:
+        path = Path(source_dir) / SOURCE_NAME if source_dir is not None else source_directory(PROJECT_ROOT) / SOURCE_NAME
+        sheets, status, error = _source_rows(path)
+    else:
+        sheets, status, error = published_sheets, "ready", None
     rules = load_merge_rules()  # Shared generation rules can change without restarting the service.
     groups = rules["groups"]
     members = {normalize_generation(member) for values in groups.values() for member in values}
