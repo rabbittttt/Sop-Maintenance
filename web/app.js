@@ -1604,4 +1604,4 @@ window.addEventListener('unhandledrejection',e=>toast(e.reason?.message||'加载
 initializeAccess().then(()=>load()).catch(err=>{$('#app').innerHTML=`<div class="empty-state"><h1>暂时无法连接数据服务</h1><p>${esc(err.message)}</p><p>${access.gateway?'请联系应用负责人检查内网业务服务，稍后刷新重试。':'请使用项目中的启动脚本打开看板。'}</p></div>`;});
 
 // Rule changes also refresh an absent maintenance workbook's current view.
-setInterval(pollWorkbookStatus,8000);
+setInterval(pollWorkbookStatus,15000);
