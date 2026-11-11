@@ -41,7 +41,10 @@ class PlainModelImportTest(unittest.TestCase):
         return self.path.read_bytes()
 
     def load(self, choice=None):
-        return self.f.service.import_content(self.path.read_bytes(), choice)
+        result = self.f.service.import_content(self.path.read_bytes(), choice,
+            confirmation_token=getattr(self, 'confirmation_token', None) if choice else None)
+        self.confirmation_token = result.get('confirmation_token')
+        return result
 
     def test_totals_need_neither_version_nor_export_id_and_preserve_details_blanks_and_missing_rows(self):
         parent = self.f.model_id('Together 2026款')

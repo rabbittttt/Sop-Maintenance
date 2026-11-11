@@ -345,14 +345,16 @@ def _key(pid, month):
 
 
 class WorkbookSync:
-    def __init__(self, store, path, writer=None, root=None, auto_create=True):
+    def __init__(self, store, path, writer=None, root=None, auto_create=True, *, frontend_only=False):
         self.store = store
         self.path = Path(path).resolve()
         self.root = Path(root or PROJECT_ROOT).resolve()
         self.writer = writer or self._node_writer
         self.auto_create = auto_create
+        self.frontend_only = frontend_only
         self.lock = threading.RLock()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not frontend_only:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._last_file_stat = None
         self._last_digest = None
         self._export_signature = None
@@ -371,6 +373,11 @@ class WorkbookSync:
             """)
 
     def status(self):
+        if self.frontend_only:
+            with self.store.lock:
+                revision = ':'.join(str(self.store.db.execute(f'SELECT COALESCE(MAX(id), 0) FROM {table}').fetchone()[0])
+                                    for table in ('events', 'catalog_versions', 'settings_versions'))
+            return {"status": "frontend", "message": "", "conflicts": [], "data_revision": revision}
         # Returning a copied small object avoids acquiring the sync lock during a long XLSX write.
         return {**self._state, "conflicts": list(self._state["conflicts"])}
 
@@ -951,6 +958,9 @@ class WorkbookSync:
                     pass
 
     def sync(self, force_export=False, choice=None):
+        if self.frontend_only:
+            self._input_checked = True
+            return self.status()
         if choice not in {None, "workbook", "db"}:
             raise ValidationError("请选择保留 workbook 或 db。")
         with self.lock, self.store.lock:

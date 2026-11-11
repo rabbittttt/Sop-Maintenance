@@ -14,7 +14,7 @@ def _name(product):
                              "version": MODEL_PLAN_LABEL})
 
 
-def import_model_table(store, entries, *, choice, actor, fingerprint):
+def import_model_table(store, entries, *, choice, actor, fingerprint, before_commit=None):
     """Merge explicit values only; an unmarked workbook supplies no old baseline.
 
     The caller holds the store lock. Confirmation is bound to this file and the
@@ -116,7 +116,7 @@ def import_model_table(store, entries, *, choice, actor, fingerprint):
         raise ValidationError("核对期间计划或车型规则已有变化，请重新导入并核对当前值。")
     result = store.import_workbook_plans({"changes": changes, "entries": new_entries,
         "catalog_changes": [], "owner": actor or "Excel导入", "reason": "车型月度计划表导入",
-        "notes": "普通车型表仅导入已填写计划，空白和缺行保留现有数据。"})
+        "notes": "普通车型表仅导入已填写计划，空白和缺行保留现有数据。"}, before_commit=before_commit)
     store.db.execute("DELETE FROM plan_model_import_previews WHERE fingerprint=?", (fingerprint,))
     return {"ok": True, "status": "imported", "source": "model_table", "imported": result["saved_count"],
             "created": result["created_count"], "catalog_updated": 0, "deactivated": 0, "conflicts": conflicts}

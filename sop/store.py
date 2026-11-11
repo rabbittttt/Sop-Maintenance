@@ -1035,7 +1035,7 @@ class SOPStore:
         self._validate_model_plan_catalog()
         return updated, deactivated
 
-    def import_workbook_plans(self, body):
+    def import_workbook_plans(self, body, *, before_commit=None):
         """Import known cells and named entry rows as one catalog/plan transaction.
 
         Blank entry cells do not clear existing plans. Entry quantities use the same
@@ -1066,6 +1066,8 @@ class SOPStore:
                 current_stamp = stamp(self.clock())
                 current_month = self.clock().astimezone(TZ).strftime("%Y-%m")
                 plan_end = horizon(current_month, self.settings()["bridge_m6"])
+                if before_commit is not None:
+                    before_commit()
                 catalog_updated, deactivated = self._merge_workbook_catalog(
                     catalog_changes, choice, current_stamp, current_month)
                 names = {}

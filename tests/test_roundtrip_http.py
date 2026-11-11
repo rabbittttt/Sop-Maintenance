@@ -39,7 +39,8 @@ class RoundtripStub:
     def register(self, path, context):
         self.registered.append((path.exists(), context))
 
-    def import_content(self, content, choice=None):
+    def import_content(self, content, choice=None, *, confirmation_token=None):
+        self.confirmation_token = confirmation_token
         self.uploads.append((content, choice))
         if self.error:
             raise self.error
@@ -99,6 +100,10 @@ class RoundtripHTTPTest(unittest.TestCase):
         code, data = self.request(self.upload(choice="workbook"))
         self.assertEqual(json.loads(data)["source"], "maintenance")
         self.assertEqual(self.service.uploads[-1], (b"xlsx-content", "workbook"))
+        self.service.error = None
+        code, _ = self.request(self.upload(choice='workbook', confirmation_token='review-id'))
+        self.assertEqual(code, 200)
+        self.assertEqual(self.service.confirmation_token, 'review-id')
 
     def test_invalid_uploads_and_cross_origin_never_reach_service(self):
         for body in [{}, self.upload(filename="bad.xlsm"), self.upload(content_base64="%%%"),

@@ -348,10 +348,13 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                         health.update(workspace=str(ROOT), port=port, pid=os.getpid())
                     self._json(health)
                 elif path == "/api/state":
-                    state = store.state()
+                    # Keep the poll revision tied to the returned values. A save
+                    # between these reads must not make stale rows look current.
+                    with store.lock:
+                        state = store.state()
+                        if workbook_sync:
+                            state["workbook_sync"] = workbook_sync.status()
                     state["source_refresh"] = source_refresh.status()
-                    if workbook_sync:
-                        state["workbook_sync"] = workbook_sync.status()
                     self._json(state)
                 elif path == "/api/option-mix":
                     self._json(read_option_mix(source_directory(getattr(source_refresh, "root", ROOT))))
@@ -367,6 +370,8 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     self._json({**workbook_sync.status(), "source_refresh": source_refresh.status(),
                                 "generation_view": generation_view})
                 elif path == "/api/plan-workbook/download" and workbook_sync:
+                    if workbook_sync.frontend_only:
+                        raise ValidationError("请使用页面上的导出按钮下载计划表。")
                     # Public GET must not import workbook edits into business data.
                     if gateway and not workbook_sync.path.is_file():
                         self._json({"error": "维护表尚未生成，请联系维护人员。"}, 404)
@@ -496,7 +501,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     self.wfile.write(encoded)
                     return
                 elif path == "/api/plans/import-xlsx":
-                    if not {"filename", "content_base64"}.issubset(body) or set(body) - {"filename", "content_base64", "choice"}:
+                    if not {"filename", "content_base64"}.issubset(body) or set(body) - {"filename", "content_base64", "choice", "confirmation_token"}:
                         raise ValidationError("请选择从本看板导出的 Excel 文件。")
                     filename, content = body["filename"], body["content_base64"]
                     if not isinstance(filename, str) or len(filename) > 255 or not filename.lower().endswith(".xlsx"):
@@ -512,6 +517,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     if not decoded or len(decoded) > 12 * 1024 * 1024:
                         raise ValidationError("Excel 文件为空或超过 12 MB。")
                     result = roundtrip_service().import_content(decoded, choice=body.get("choice"),
+                        **({"confirmation_token": body["confirmation_token"]} if "confirmation_token" in body else {}),
                         **({"actor": actor} if actor else {}))
                     if not result.get("ok", False):
                         self._json(result, 409 if result.get("status") == "conflict" else 400)
@@ -542,9 +548,13 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     else:
                         result = store.save_products(body)
                 elif path in {"/api/plan-workbook/sync", "/api/plan-workbook/export"} and workbook_sync:
+                    if workbook_sync.frontend_only:
+                        raise ValidationError("请通过页面导入或导出计划表。")
                     status = workbook_sync.sync(force_export=path.endswith("/export"), choice=body.get("choice"))
                     result = {"ok": status["status"] not in {"conflict", "error"}, **status}
                 elif path == "/api/plan-workbook/open" and workbook_sync:
+                    if workbook_sync.frontend_only:
+                        raise ValidationError("请通过页面导入或导出计划表。")
                     status = workbook_sync.sync(force_export=not workbook_sync.path.is_file())
                     if not workbook_sync.path.is_file():
                         raise ValidationError(status["message"])
@@ -671,7 +681,7 @@ def main():
             importlib.import_module("sop.data").refresh(output_path=args.data_dir / "sales.json")
         store = SOPStore(args.data_dir / "sop.sqlite3", args.data_dir / "sales.json")
         store.ensure_daily_snapshots()
-        workbook_sync = WorkbookSync(store, args.plan_file, auto_create=False)
+        workbook_sync = WorkbookSync(store, args.plan_file, auto_create=False, frontend_only=True)
         workbook_sync.sync()
         source_refresh = SalesRefresh(store, workbook_sync, root=ROOT)
         snapshot_backup = SnapshotBackup(store)

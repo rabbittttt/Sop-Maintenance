@@ -102,7 +102,7 @@ class RoundtripE2ETest(unittest.TestCase):
         self.assertFalse(conflict["ok"])
         self.assertEqual(conflict["status"], "conflict")
         self.assertEqual(value("a", "2026-10"), (50, 330))
-        kept = importer.import_content(edited.read_bytes(), choice="db")
+        kept = importer.import_content(edited.read_bytes(), choice="db", confirmation_token=conflict['confirmation_token'])
         self.assertTrue(kept["ok"], kept)
         self.assertEqual(value("a", "2026-10"), (50, 330))
         # Deleting an original nonblank plan clears only that month.

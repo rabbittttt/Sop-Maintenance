@@ -207,6 +207,9 @@ class PlanRoundtrip:
                     token TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS plan_model_import_previews (
                     fingerprint TEXT PRIMARY KEY, snapshot TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS plan_import_confirmations (
+                    token TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+                    actor TEXT NOT NULL, snapshot TEXT NOT NULL, result TEXT);
                 CREATE TABLE IF NOT EXISTS plan_download_entry_imports (
                     token TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TRIGGER IF NOT EXISTS plan_download_no_update BEFORE UPDATE ON plan_download_exports
@@ -219,7 +222,7 @@ class PlanRoundtrip:
         return self.workbook_sync.lock if self.workbook_sync is not None else nullcontext()
 
     def _sync_before(self):
-        if self.workbook_sync is None:
+        if self.workbook_sync is None or self.workbook_sync.frontend_only:
             return
         result = self.workbook_sync.sync()
         # A missing primary workbook has no saved edits to read. Its automatic
@@ -569,7 +572,39 @@ class PlanRoundtrip:
                 entries.append({**labels, "plans": plans})
             return token, expected, values, entries
 
-    def import_content(self, content, choice=None, *, actor=None):
+    def import_content(self, content, choice=None, *, actor=None, confirmation_token=None):
+        from .import_guard import ImportGuard
+
+        if choice not in {None, "db", "workbook"}:
+            raise ValidationError("请选择保留网页值或使用表格值。")
+        if not isinstance(content, bytes) or not 0 < len(content) <= MAX_UPLOAD_BYTES:
+            raise ValidationError("请选择不超过 12 MB 的 .xlsx 计划表。")
+        if actor is not None:
+            actor = text_field(actor, "登录用户", 100)
+            if not actor:
+                raise ValidationError("登录用户不能为空。")
+        with self._lock(), self.store.lock:
+            self._sync_before()
+            self.store.read_sales()
+            guard = ImportGuard(self.store, content, actor, confirmation_token)
+            if choice is not None and guard.result is not None:
+                return guard.result
+
+            def check():
+                guard.check()
+                if choice is not None and not guard.confirmed:
+                    raise ValidationError("冲突确认已失效，请重新导入并核对当前值。")
+
+            result = self._import_content(content, choice if guard.confirmed else None,
+                                          actor=actor, before_commit=check)
+            if result.get('status') == 'conflict':
+                return guard.preview(result)
+            if guard.confirmed and choice is not None:
+                self.store.db.execute('UPDATE plan_import_confirmations SET result=? WHERE token=?',
+                                      (json.dumps(result, ensure_ascii=False), confirmation_token))
+            return result
+
+    def _import_content(self, content, choice=None, *, actor=None, before_commit=None):
         if choice not in {None, "db", "workbook"}:
             raise ValidationError("请选择保留网页值或使用表格值。")
         if actor is not None:
@@ -583,7 +618,7 @@ class PlanRoundtrip:
                 self._sync_before()
                 with self.store.lock:
                     result = import_model_table(self.store, entries, choice=choice, actor=actor,
-                                                fingerprint=exported["_plain_model_table"])
+                                                fingerprint=exported["_plain_model_table"], before_commit=before_commit)
                 return self._sync_import_result(result) if result.get("ok") else result
         with self._lock():
             self._sync_before()
@@ -655,7 +690,8 @@ class PlanRoundtrip:
                     result = self.store.import_workbook_plans({"changes": changes, "entries": entries, "choice": choice,
                                                               "catalog_changes": exported.get("_catalog_changes", []),
                                                               "entry_tracking_token": token if exported.get("manifest") is not None else None,
-                                                              "owner": actor or "Excel导入", "reason": "导出计划表回填", "notes": ""})
+                                                              "owner": actor or "Excel导入", "reason": "导出计划表回填", "notes": ""},
+                                                              before_commit=before_commit)
                 except ConflictError as error:
                     for conflict in error.conflicts:
                         index = conflict.get("manual_entry")
@@ -672,7 +708,7 @@ class PlanRoundtrip:
 
     def _sync_import_result(self, response):
         # Business commit succeeded; a locked Excel file must not invite a retry.
-        if self.workbook_sync is not None:
+        if self.workbook_sync is not None and not self.workbook_sync.frontend_only:
             try:
                 # A successful Excel import explicitly starts file maintenance.
                 # Build the canonical workbook if absent; existing workbooks

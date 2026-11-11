@@ -96,7 +96,10 @@ class ModelExportRoundtripTest(unittest.TestCase):
         return f"{openpyxl.utils.get_column_letter(column)}{row}"
 
     def import_file(self, choice=None):
-        return self.service.import_content(self.path.read_bytes(), choice)
+        result = self.service.import_content(self.path.read_bytes(), choice,
+            confirmation_token=getattr(self, 'confirmation_token', None) if choice else None)
+        self.confirmation_token = result.get('confirmation_token')
+        return result
 
     def create_model(self, model="C 2026款", value=80):
         view = self.store.generation_view()
@@ -132,6 +135,7 @@ class ModelExportRoundtripTest(unittest.TestCase):
             with self.subTest(amount=amount):
                 edit_cell(self.path, self.address("C 2026款"), amount)
                 edit_cell(self.path, self.address("C 2026款", "2026-12"), 21)
+                self.assertFalse(self.import_file()['ok'])
                 with self.assertRaisesRegex(ValidationError, "2026-10.*不可"):
                     self.import_file("workbook")
                 self.assertEqual(self.value(pid), 80)
@@ -182,6 +186,7 @@ class ModelExportRoundtripTest(unittest.TestCase):
         self.assertEqual((conflict["conflicts"][0]["baseline"], conflict["conflicts"][0]["database"]), (80, 90))
         self.assertEqual(self.import_file("db")["imported"], 0)
         self.assertEqual(self.value(pid), 90)
+        self.assertFalse(self.import_file()['ok'])
         self.assertEqual(self.import_file("workbook")["imported"], 1)
         self.assertEqual(self.store.db.execute("SELECT forecast FROM plans WHERE product_id=?", (pid,)).fetchone()[0], 88)
         self.assertEqual(self.value("d"), 40)

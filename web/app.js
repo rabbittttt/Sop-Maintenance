@@ -678,7 +678,7 @@ function planVersionRows(ps,visibleMonths) {
 }
 function workbookStrip() {
   const w=state.workbook_sync||{},bad=['conflict','error'].includes(w.status);
-  if(!w.status||w.status==='absent')return '';
+  if(!w.status||w.status==='absent'||w.status==='frontend')return '';
   const synced=w.status==='synced',label=bad?'Excel同步待处理':({synced:'Excel已同步',absent:'网页直接保存 · Excel可选',pending:'Excel待同步',syncing:'Excel同步中',idle:'Excel准备同步'})[w.status]||'Excel准备同步';
   return `<span class="sheet-sync ${synced?'synced':bad||w.status==='pending'?'warn':'neutral'}"${!synced&&w.message?` title="${esc(w.message)}"`:''} role="status"><i class="status-dot"></i>${label}</span>${bad?button('查看问题','workbook-status','small'):''}`;
 }
@@ -1001,9 +1001,9 @@ async function readPlanImportFile(file) {
   });
   return {filename:file.name,content_base64};
 }
-async function submitPlanImport(payload,choice) {
+async function submitPlanImport(payload,choice,confirmationToken) {
   if(choice!==undefined&&!['db','workbook'].includes(choice))throw new Error('请选择冲突项的处理方式');
-  const body={filename:payload.filename,content_base64:payload.content_base64,...(choice?{choice}:{})};
+  const body={filename:payload.filename,content_base64:payload.content_base64,...(choice?{choice,confirmation_token:confirmationToken}:{})};
   const response=await serviceFetch('/api/plans/import-xlsx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   let data;
   try{data=await response.json();}catch{throw new Error('未能确认导入结果，请刷新看板检查后重试');}
@@ -1020,14 +1020,14 @@ function planImportConflictsHtml(conflicts) {
 function importPlans() {
   openDialog(`<form id="import-plan-form"><h2>导入SOP计划</h2><div id="import-error" class="inline-error" role="alert" tabindex="-1"></div><label class="field import-file-field">Excel文件（.xlsx，最大 12 MB）<input id="import-plan-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></label><p id="import-progress" class="import-progress" role="status" aria-live="polite"></p><div id="import-conflicts"></div><div class="dialog-actions">${button('取消','close-dialog')}<button id="import-save" type="submit" class="button primary" disabled>导入计划</button></div></form>`);
   const form=$('#import-plan-form'),input=$('#import-plan-file'),save=$('#import-save'),error=$('#import-error'),progress=$('#import-progress'),conflicts=$('#import-conflicts'),dialog=$('#edit-dialog'),close=$('[data-close]',dialog);
-  let prepared=null,pending=false,valid=false,hasConflicts=false,maintenanceBlocked=false;
+  let prepared=null,pending=false,valid=false,hasConflicts=false,maintenanceBlocked=false,confirmationToken=null;
   const cancel=e=>{if(pending)e.preventDefault();};
   dialog.addEventListener('cancel',cancel);
   dialog.addEventListener('close',()=>dialog.removeEventListener('cancel',cancel),{once:true});
   const showError=message=>{error.textContent=message;error.focus();};
   const setBusy=busy=>{pending=busy;form.setAttribute('aria-busy',String(busy));$$('input,button',form).forEach(el=>el.disabled=busy);close.disabled=busy;save.disabled=busy||!valid;save.hidden=hasConflicts||maintenanceBlocked;save.textContent=busy?'正在导入…':'导入计划';progress.textContent=busy?'正在检查表格并合并计划，请稍候…':'';};
   input.onchange=()=>{
-    prepared=null;valid=false;hasConflicts=false;maintenanceBlocked=false;conflicts.innerHTML='';error.textContent='';
+    prepared=null;confirmationToken=null;valid=false;hasConflicts=false;maintenanceBlocked=false;conflicts.innerHTML='';error.textContent='';
     try{validatePlanImportFile(input.files[0]);valid=true;}catch(err){if(input.files.length)showError(err.message);}
     setBusy(false);
   };
@@ -1051,20 +1051,20 @@ function importPlans() {
     error.textContent='';setBusy(true);
     try{
       prepared||=await readPlanImportFile(input.files[0]);
-      const result=await submitPlanImport(prepared,choice);
+      const result=await submitPlanImport(prepared,choice,confirmationToken);
       closeDialog();
       const message=result.imported||result.created||result.catalog_updated?`已导入 ${result.imported||0} 项计划${result.created?`，新增 ${result.created} 行`:''}${result.catalog_updated?`，更新 ${result.catalog_updated} 个版本`:''}${result.deactivated?`（其中停用 ${result.deactivated} 个）`:''}`:'计划已核对，没有需要导入的新修改';
       try{await load();toast(result.warning?`${message}；${result.warning}`:message,!!result.warning);}catch{toast(`${message}；页面刷新失败，请点击刷新查看${result.warning?`。${result.warning}`:''}`,true);}
     }catch(err){
       if($('#import-plan-form')!==form){toast(err.message,true);return;}
       if(err.status===400){
-        prepared=null;input.value='';valid=false;hasConflicts=false;maintenanceBlocked=false;conflicts.innerHTML='';
+        prepared=null;confirmationToken=null;input.value='';valid=false;hasConflicts=false;maintenanceBlocked=false;conflicts.innerHTML='';
         showError(`${err.message}\n请保存Excel后重新选择文件导入。`);return;
       }
       if(err.status===409&&err.data?.source==='maintenance'){
         showMaintenance(err.data);
       }else if(err.status===409&&Array.isArray(err.data?.conflicts)&&err.data.conflicts.length){
-        hasConflicts=true;conflicts.innerHTML=planImportConflictsHtml(err.data.conflicts);
+        hasConflicts=true;confirmationToken=err.data.confirmation_token;conflicts.innerHTML=planImportConflictsHtml(err.data.conflicts);
         $$('[data-import-choice]',conflicts).forEach(el=>el.onclick=()=>submit(el.dataset.importChoice));
       }
       showError(err.message);
@@ -1189,8 +1189,7 @@ function editShipments(id=matchProduct||products().find(p=>!p.read_only)?.id) {
 }
 function dataPage() {
   const meta=state.meta,sources=state.sources?.length?state.sources:(meta.source_files||[]),q=(meta.quality||[]).filter(item=>item?.level==='warning'||item?.level==='error');
-  const workbookActions=button(state.workbook_sync?.status==='absent'?'创建维护Excel':'打开维护Excel','open-workbook','small')
-    +(state.workbook_sync?.status==='absent'?'':button('同步Excel','sync-workbook','small'));
+  const workbookActions='';
   $('#app').innerHTML=pageHeading('data')+
     `<div class="two-col"><section class="card"><div class="panel-head"><h2>销量数据接入</h2><div class="toolbar"><span class="badge good">已接入</span>${button('来源与停用管理','manage-products','small')}${button('刷新销量文件','refresh-sales','primary small')}</div></div><div class="card-body"><dl class="info-list"><dt>业务数据截至</dt><dd>${esc(meta.data_through||'待确认')}</dd>${state.source_refresh?.status==='error'?`<dt>读取异常</dt><dd>${esc(state.source_refresh.message)}</dd>`:''}<dt>最近读取</dt><dd>${dateText(meta.generated_at)}</dd><dt>版本数量</dt><dd>${state.products.length} 个</dd><dt>参考口径</dt><dd>${meta.metrics.map(m=>esc(m.label)).join('、')}</dd></dl><h3>来源文件</h3><ul class="source-list">${sources.map(s=>`<li>${esc(typeof s==='string'?s:s.file||s.name||s.path||JSON.stringify(s))}${s.sheet?`<small>${esc(s.sheet)}</small>`:''}</li>`).join('')}</ul></div></section><section class="card"><div class="panel-head"><h2>计划与快照规则</h2><div class="toolbar">${workbookActions}</div></div><div class="card-body"><dl class="info-list"><dt>维护颗粒度</dt><dd>品牌 → 车型＋年款 × 月份；版本可选</dd><dt>本月计划口径</dt><dd>全月总量（含已发生部分）</dd><dt>年度扩展</dt><dd>每年9月开放到次年12月</dd><dt>当前计划截止</dt><dd>${shortMonth(state.plan_end)}</dd><dt>每日快照截点</dt><dd>24:00（北京时间）</dd><dt>提前0周</dt><dd>月初周内属于当月的天数超过4天，取上周日24:00。其余取当周日24:00。</dd></dl><label class="checkbox-field"><input id="bridge-toggle" type="checkbox" ${state.settings.bridge_m6!==false?'checked':''}>7、8月补足M+6（7月到次年1月，8月到次年2月）</label>${button('保存规则','save-settings')}</div></section></div>`+
     (q.length?`<section class="card page-section"><div class="panel-head"><h2>数据检查</h2></div><div class="card-body">${q.map(item=>`<div class="quality-row"><span class="badge warn">${item.level==='error'?'异常':'待核对'}</span><span>${esc(item.message||item.name||'')}</span></div>`).join('')}</div></section>`:'');
@@ -1481,7 +1480,7 @@ async function pollWorkbookStatus() {
       showGenerationError(view.error,'rules');
       return;
     }
-    if(generationViewError||generationStatusChanged(view)||sync.last_sync!==previous.last_sync||sync.status!==previous.status||sync.message!==previous.message||JSON.stringify(sync.source_refresh||{})!==JSON.stringify(state.source_refresh||{})) {
+    if(generationViewError||generationStatusChanged(view)||sync.data_revision!==previous.data_revision||sync.last_sync!==previous.last_sync||sync.status!==previous.status||sync.message!==previous.message||JSON.stringify(sync.source_refresh||{})!==JSON.stringify(state.source_refresh||{})) {
       const scrolls=$$('.table-scroll').map(el=>({left:el.scrollLeft,top:el.scrollTop}));
       await load();$$('.table-scroll').forEach((el,i)=>{if(scrolls[i]){el.scrollLeft=scrolls[i].left;el.scrollTop=scrolls[i].top;}});
     }

@@ -126,7 +126,10 @@ class RoundtripTest(unittest.TestCase):
         edit_cell(self.path, self.cells[(pid, month)], value)
 
     def import_file(self, choice=None):
-        return self.service.import_content(self.path.read_bytes(), choice)
+        result = self.service.import_content(self.path.read_bytes(), choice,
+            confirmation_token=getattr(self, 'confirmation_token', None) if choice else None)
+        self.confirmation_token = result.get('confirmation_token')
+        return result
 
     def test_authoritative_quantities_partial_scope_and_same_names(self):
         self.save("a", "2026-10", 10)
@@ -178,6 +181,7 @@ class RoundtripTest(unittest.TestCase):
         self.assertEqual(self.import_file("db")["imported"], 1)
         self.assertEqual(self.value(), 15)
         self.assertEqual(self.value("b"), 30)
+        self.assertEqual(self.import_file()["status"], "conflict")
         self.assertEqual(self.import_file("workbook")["imported"], 1)
         self.assertEqual(self.value(), 20)
 

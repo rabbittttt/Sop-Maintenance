@@ -117,7 +117,10 @@ class InlineRoundtripTest(unittest.TestCase):
 
     def apply(self, choice=None):
         rewrite_grid(self.path, self.grid)
-        return self.service.import_content(self.path.read_bytes(), choice)
+        result = self.service.import_content(self.path.read_bytes(), choice,
+            confirmation_token=getattr(self, 'confirmation_token', None) if choice else None)
+        self.confirmation_token = result.get('confirmation_token')
+        return result
 
     def product(self, pid):
         return next(p for p in self.store.list_products()["items"] if p["id"] == pid)
